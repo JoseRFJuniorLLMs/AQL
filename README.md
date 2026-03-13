@@ -74,7 +74,11 @@ THEN ASSOCIATE @results[0] LINKING @results[1]
 │  (NAQ)    │  (Cypher) │  (REST)   │  (SQL/FT)       │
 │ Poincare  │ Euclidean │ Euclidean │  Euclidean      │
 │ FULL ★    │  Partial  │  Partial  │   Minimal       │
-└───────────┴───────────┴───────────┴─────────────────┘
+├───────────┴───────────┴───────────┴─────────────────┤
+│     MySQL/MariaDB  │  SQLite (FTS5)  │  SQL Server   │
+│     (FULLTEXT)     │  (embedded)     │  (FREETEXT)   │
+│      Relational    │   Relational    │  Relational   │
+└────────────────────┴─────────────────┴───────────────┘
 ```
 
 ## Workspace Crates
@@ -87,6 +91,9 @@ THEN ASSOCIATE @results[0] LINKING @results[1]
 | `aql-qdrant` | Qdrant backend (vector search) |
 | `aql-pgvector` | PostgreSQL+pgvector backend |
 | `aql-redis` | Redis Stack backend |
+| `aql-mysql` | MySQL/MariaDB backend (FULLTEXT, recursive CTE) |
+| `aql-sqlite` | SQLite backend (FTS5, embedded, WAL) |
+| `aql-mssql` | SQL Server backend (FREETEXT, graph tables) |
 | `aql-cli` | Interactive REPL |
 | `aql-python` | Python bindings (PyO3) |
 | `aql-wasm` | Browser/edge WASM build |

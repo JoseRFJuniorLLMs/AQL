@@ -7,6 +7,9 @@ members = [
     "aql-qdrant",
     "aql-pgvector",
     "aql-redis",
+    "aql-mysql",
+    "aql-sqlite",
+    "aql-mssql",
     "aql-cli",
     "aql-wasm",
 ]
