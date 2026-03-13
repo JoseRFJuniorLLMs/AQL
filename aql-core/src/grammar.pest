@@ -1,0 +1,199 @@
+// ═══════════════════════════════════════════════════════════════
+// AQL v2.0 — Agent Cognition Language
+// Grammar for pest parser (Rust)
+// Author: Jose R F Junior
+// ═══════════════════════════════════════════════════════════════
+
+program = { SOI ~ (statement ~ NEWLINE*)+ ~ EOI }
+
+// ── Statements ───────────────────────────────────────────────
+
+statement = {
+    atomic_block
+  | parallel_block
+  | watch_statement
+  | explain_statement
+  | chain_statement
+}
+
+chain_statement = {
+    verb_statement ~ (THEN ~ verb_statement)*
+}
+
+verb_statement = {
+    conditional_statement
+  | simple_statement
+}
+
+conditional_statement = {
+    simple_statement ~ when_clause ~ (ELSE ~ simple_statement)?
+}
+
+when_clause = {
+    WHEN ~ condition_expr
+}
+
+condition_expr = {
+    "@results" ~ "." ~ ident ~ comp_op ~ (number | string)
+}
+
+comp_op = { ">=" | "<=" | "!=" | ">" | "<" | "==" }
+
+simple_statement = {
+    verb ~ subject ~ qualifier*
+}
+
+// ── Parallel execution ───────────────────────────────────────
+
+parallel_block = {
+    simple_statement ~ (AND ~ simple_statement)+
+    ~ (THEN ~ verb_statement)?
+}
+
+// ── Atomic transaction ───────────────────────────────────────
+
+atomic_block = {
+    ATOMIC ~ "{" ~ NEWLINE* ~ (statement ~ NEWLINE*)+ ~ "}"
+}
+
+// ── Watch / Subscribe ────────────────────────────────────────
+
+watch_statement = {
+    WATCH ~ subject ~ ON_CHANGE ~ chain_statement
+  | SUBSCRIBE ~ subject ~ ON_INSERT ~ chain_statement
+}
+
+// ── Explain ──────────────────────────────────────────────────
+
+explain_statement = {
+    EXPLAIN ~ simple_statement
+}
+
+// ── 13 Verbs ─────────────────────────────────────────────────
+
+verb = {
+    RECALL | RESONATE | REFLECT | TRACE
+  | IMPRINT | ASSOCIATE | DISTILL | FADE
+  | DESCEND | ASCEND | ORBIT
+  | DREAM | IMAGINE
+}
+
+RECALL    = { "RECALL" }
+RESONATE  = { "RESONATE" }
+REFLECT   = { "REFLECT" }
+TRACE     = { "TRACE" }
+IMPRINT   = { "IMPRINT" }
+ASSOCIATE = { "ASSOCIATE" }
+DISTILL   = { "DISTILL" }
+FADE      = { "FADE" }
+DESCEND   = { "DESCEND" }
+ASCEND    = { "ASCEND" }
+ORBIT     = { "ORBIT" }
+DREAM     = { "DREAM" }
+IMAGINE   = { "IMAGINE" }
+
+// ── Keywords ─────────────────────────────────────────────────
+
+THEN      = { "THEN" }
+AND       = { "AND" }
+WHEN      = { "WHEN" }
+ELSE      = { "ELSE" }
+ATOMIC    = { "ATOMIC" }
+WATCH     = { "WATCH" }
+SUBSCRIBE = { "SUBSCRIBE" }
+ON_CHANGE = { "ON_CHANGE" }
+ON_INSERT = { "ON_INSERT" }
+EXPLAIN   = { "EXPLAIN" }
+FROM      = { "FROM" }
+TO        = { "TO" }
+ABOUT     = { "ABOUT" }
+
+// ── Multi-agent keywords ─────────────────────────────────────
+
+SHARE     = { "SHARE" }
+DELEGATE  = { "DELEGATE" }
+NEGOTIATE = { "NEGOTIATE" }
+WITH_KW   = { "WITH" }
+POLICY_KW = { "POLICY" }
+
+// ── Subjects ─────────────────────────────────────────────────
+
+subject = {
+    trace_range
+  | about_subject
+  | type_with_content
+  | self_ref
+  | agent_ref
+  | results_ref
+  | text
+  | type_filter
+}
+
+trace_range       = { FROM ~ string ~ TO ~ string }
+about_subject     = { ABOUT ~ (string | self_ref) }
+type_with_content = { epistemic_type ~ ":" ~ string }
+self_ref          = { "@self" }
+agent_ref         = { "agent:" ~ string }
+results_ref       = { "@results" ~ ("[" ~ number ~ "]")? | "@last_dream" | "@delegate.result" }
+text              = { string }
+type_filter       = { epistemic_type }
+
+epistemic_type = {
+    "Belief" | "Experience" | "Pattern" | "Signal" | "Intention"
+}
+
+// ── Qualifiers (v2 — expanded) ───────────────────────────────
+
+qualifier = {
+    confidence_q | recency_q | depth_q | within_q
+  | as_q | linking_q | novelty_q | limit_q
+  | magnitude_q | curvature_q | radius_q
+  | valence_q | arousal_q | mood_q
+  | evidence_q
+  | with_agent_q | to_agent_q | policy_q
+}
+
+confidence_q  = { "CONFIDENCE" ~ number }
+recency_q     = { "RECENCY" ~ recency_degree }
+depth_q       = { "DEPTH" ~ integer }
+within_q      = { "WITHIN" ~ (scope | string) }
+as_q          = { "AS" ~ epistemic_type }
+linking_q     = { "LINKING" ~ (string | results_ref | self_ref) }
+novelty_q     = { "NOVELTY" ~ novelty_degree }
+limit_q       = { "LIMIT" ~ integer }
+
+// v2 qualifiers
+magnitude_q   = { "MAGNITUDE" ~ number_range }
+curvature_q   = { "CURVATURE" ~ curvature_degree }
+radius_q      = { "RADIUS" ~ number }
+valence_q     = { "VALENCE" ~ (valence_polarity | number) }
+arousal_q     = { "AROUSAL" ~ (arousal_level | number) }
+mood_q        = { "MOOD" ~ mood_state }
+evidence_q    = { "EVIDENCE" ~ integer }
+with_agent_q  = { WITH_KW ~ agent_ref }
+to_agent_q    = { TO ~ agent_ref }
+policy_q      = { POLICY_KW ~ policy_name }
+
+// ── Qualifier values ─────────────────────────────────────────
+
+recency_degree   = { "fresh" | "recent" | "distant" | "ancient" }
+novelty_degree   = { "high" | "medium" | "low" }
+scope            = { "session" | "collection" | "graph" }
+curvature_degree = { "high" | "medium" | "low" | "flat" }
+
+valence_polarity = { "positive" | "negative" | "neutral" }
+arousal_level    = { "high" | "medium" | "low" | "calm" }
+mood_state       = { "creative" | "analytical" | "anxious" | "focused" | "exploratory" | "conservative" }
+policy_name      = { "weighted_average" | "keep_higher" | "replace_always" | "create_conflict" }
+
+number_range     = { number ~ ".." ~ number }
+
+// ── Literals ─────────────────────────────────────────────────
+
+string  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+number  = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+integer = @{ ASCII_DIGIT+ }
+ident   = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+WHITESPACE = _{ " " | "\t" }
+COMMENT    = _{ "#" ~ (!NEWLINE ~ ANY)* }

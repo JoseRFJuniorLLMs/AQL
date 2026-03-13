@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "aql-core",
+    "aql-nietzschedb",
+    "aql-neo4j",
+    "aql-qdrant",
+    "aql-pgvector",
+    "aql-redis",
+    "aql-cli",
+    "aql-wasm",
+]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "AGPL-3.0"
+authors = ["Jose R F Junior"]
+repository = "https://github.com/JoseRFJuniorLLMs/AQL"
+
+[workspace.dependencies]
+aql-core = { path = "aql-core" }
+aql-nietzschedb = { path = "aql-nietzschedb" }
+aql-neo4j = { path = "aql-neo4j" }
+aql-qdrant = { path = "aql-qdrant" }
+aql-pgvector = { path = "aql-pgvector" }
+aql-redis = { path = "aql-redis" }
+
+# Shared deps
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+pest = "2.7"
+pest_derive = "2.7"

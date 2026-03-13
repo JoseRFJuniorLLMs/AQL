@@ -1,0 +1,18 @@
+[package]
+name = "aql-nietzschedb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "AQL NietzscheDB backend — full cognitive experience with hyperbolic geometry"
+
+[dependencies]
+aql-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+tonic = "0.12"
+prost = "0.13"

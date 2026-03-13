@@ -1,0 +1,18 @@
+[package]
+name = "aql-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "AQL interactive CLI (REPL) for cognitive queries"
+
+[dependencies]
+aql-core = { workspace = true }
+aql-nietzschedb = { path = "../aql-nietzschedb" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
+rustyline = "14"
+colored = "2"
+clap = { version = "4", features = ["derive"] }

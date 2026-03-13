@@ -1,0 +1,15 @@
+[package]
+name = "aql-pgvector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "AQL PostgreSQL+pgvector backend — SQL + vectors"
+
+[dependencies]
+aql-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
