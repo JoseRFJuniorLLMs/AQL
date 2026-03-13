@@ -13,7 +13,7 @@ use rustyline::DefaultEditor;
 use std::sync::Arc;
 
 #[derive(ClapParser)]
-#[command(name = "aql", version = aql_core::VERSION, about = "AQL — Agent Cognition Language")]
+#[command(name = "aql", version = aql_core::VERSION, about = "AQL — Agent Query Language")]
 struct Cli {
     /// Backend to connect to
     #[arg(short, long, default_value = "nietzschedb")]
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Interactive REPL
     println!("{}", "╔══════════════════════════════════════════════╗".cyan());
-    println!("{}", "║   AQL — Agent Cognition Language v2.0       ║".cyan());
+    println!("{}", "║   AQL — Agent Query Language v2.0       ║".cyan());
     println!("{}", "║   Backend: NietzscheDB (full experience)    ║".cyan());
     println!("{}", "║   Type 'help' or 'quit' to exit             ║".cyan());
     println!("{}", "╚══════════════════════════════════════════════╝".cyan());

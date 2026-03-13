@@ -1,4 +1,4 @@
-//! Core types for AQL — Agent Cognition Language v2.0
+//! Core types for AQL — Agent Query Language v2.0
 //! Epistemic types, recency, novelty, scope, curvature, affect.
 
 use serde::{Deserialize, Serialize};

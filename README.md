@@ -1,4 +1,4 @@
-# AQL — Agent Cognition Language
+# AQL — Agent Query Language
 
 > *O NQL fala para quem le. O NAQ fala para quem calcula. O AQL fala para quem pensa.*
 > *E agora — AQL fala para qualquer banco que queira pensar.*
@@ -61,7 +61,7 @@ THEN ASSOCIATE @results[0] LINKING @results[1]
 ┌─────────────────────────────────────────────────────┐
 │                  Agent / LLM / MCP                  │
 ├─────────────────────────────────────────────────────┤
-│           AQL — Agent Cognition Language             │
+│           AQL — Agent Query Language             │
 │  RECALL · RESONATE · REFLECT · TRACE · IMPRINT      │
 │  ASSOCIATE · DISTILL · FADE · DESCEND · ASCEND      │
 │  DREAM · EXPLAIN · WATCH                            │

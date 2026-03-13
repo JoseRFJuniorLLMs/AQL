@@ -1,4 +1,4 @@
-//! # AQL — Agent Cognition Language
+//! # AQL — Agent Query Language
 //!
 //! A cognitive intent language for agents interacting with knowledge graphs
 //! and vector databases. AQL models how an agent *uses* memory, not how to query it.

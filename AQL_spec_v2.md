@@ -1,4 +1,4 @@
-# AQL — Agent Cognition Language
+# AQL — Agent Query Language
 ## Especificacao Formal v2.0
 
 **Projecto:** AQL (protocolo universal, backend-agnostic)
@@ -86,7 +86,7 @@ A experiencia completa — geometria hiperbolica, dream cycles, energy model, L-
 ┌─────────────────────────────────────────────────────┐
 │                  Agente / LLM / MCP                 │
 ├─────────────────────────────────────────────────────┤
-│           AQL — Agent Cognition Language             │
+│           AQL — Agent Query Language             │
 │  RECALL · RESONATE · REFLECT · TRACE · IMPRINT      │
 │  ASSOCIATE · DISTILL · FADE · DESCEND · ASCEND      │
 │  DREAM · EXPLAIN · WATCH                            │
@@ -513,7 +513,7 @@ aql/                              ← Repo independente
 
 ```pest
 // ═══════════════════════════════════════════════════════════════
-// AQL v2.0 — Agent Cognition Language
+// AQL v2.0 — Agent Query Language
 // Grammar for pest parser (Rust)
 // ═══════════════════════════════════════════════════════════════
 
@@ -2937,6 +2937,6 @@ fn when_count_gt_0_false_for_empty() {
 
 ---
 
-*AQL v2.0 — Agent Cognition Language — Jose R F Junior — 2026 — AGPL-3.0*
+*AQL v2.0 — Agent Query Language — Jose R F Junior — 2026 — AGPL-3.0*
 *O SQL dos agentes cognitivos.*
 *github.com/JoseRFJuniorLLMs/AQL*

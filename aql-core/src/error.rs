@@ -1,4 +1,4 @@
-//! Error types for AQL — Agent Cognition Language
+//! Error types for AQL — Agent Query Language
 
 use crate::ast::Verb;
 use thiserror::Error;

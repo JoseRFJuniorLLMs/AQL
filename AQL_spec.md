@@ -1,4 +1,4 @@
-# AQL — Agent Cognition Language
+# AQL — Agent Query Language
 ## Especificação Formal Completa v1.0
 
 **Projecto:** NietzscheDB  

@@ -1,5 +1,5 @@
 """
-AQL — Agent Cognition Language v2.0
+AQL — Agent Query Language v2.0
 
 A cognitive intent language for agents interacting with
 knowledge graphs and vector databases.
