@@ -304,8 +304,45 @@ impl AqlBackend for NietzscheBackend {
     }
 
     async fn imprint(&self, plan: &ImprintPlan) -> Result<CognitiveResult, AqlError> {
-        let instructions = lower_imprint(plan);
-        self.execute_instructions(instructions, "IMPRINT").await
+        let col = self.collection(&plan.base.collection);
+        let node_type = plan
+            .epistemic_type
+            .map(|t| t.to_nietzsche_node_type().to_string())
+            .unwrap_or("Semantic".into());
+        let energy = plan.initial_energy.unwrap_or(0.6);
+
+        // Step 1: Insert the node
+        let mut client = self.client().await?;
+        let resp = client.insert_node(proto::InsertNodeRequest {
+            id: String::new(),
+            embedding: None,
+            content: plan.content.clone().into_bytes(),
+            node_type,
+            energy,
+            collection: col.clone(),
+            expires_at: 0,
+        }).await.map_err(|e| AqlError::Backend(format!("InsertNode: {e}")))?;
+
+        let node_resp = resp.into_inner();
+        let node_id = node_resp.id.clone();
+        let node = node_response_to_cognitive(&node_resp, 0.0);
+
+        // Step 2: Link edge using the ACTUAL returned node ID (not content string)
+        if let Some(ref link_to) = plan.link_to {
+            let edge_instructions = vec![NaqInstruction::InsertEdge {
+                collection: col,
+                source: node_id,
+                target: link_to.clone(),
+                edge_type: "ASSOCIATED".into(),
+                weight: 1.0,
+            }];
+            let edge_result = self.execute_instructions(edge_instructions, "IMPRINT_LINK").await?;
+            let mut combined = CognitiveResult::from_nodes(vec![node]);
+            combined.edges = edge_result.edges;
+            return Ok(combined);
+        }
+
+        Ok(CognitiveResult::from_nodes(vec![node]))
     }
 
     async fn fade(&self, plan: &FadePlan) -> Result<CognitiveResult, AqlError> {
