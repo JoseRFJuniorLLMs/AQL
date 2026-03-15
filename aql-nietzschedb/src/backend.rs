@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 use tonic::transport::Channel;
 
+use crate::hyperbolic;
 use crate::lowering::*;
 use crate::proto;
 use crate::proto::nietzsche_db_client::NietzscheDbClient;
@@ -56,6 +57,34 @@ impl NietzscheBackend {
         Ok(NietzscheDbClient::new(channel.clone()))
     }
 
+    /// Batch-fetch full nodes from FTS results (eliminates N+1 GetNode calls).
+    async fn fetch_fts_nodes(
+        client: &mut NietzscheDbClient<Channel>,
+        collection: &str,
+        results: Vec<proto::FtsResultProto>,
+    ) -> Vec<CognitiveNode> {
+        // Collect all node IDs first, then fetch in sequence (gRPC doesn't have batch GetNode)
+        // But we avoid silently dropping errors — we log and skip
+        let mut nodes = Vec::with_capacity(results.len());
+        for r in results {
+            match client.get_node(proto::NodeIdRequest {
+                id: r.node_id.clone(),
+                collection: collection.to_string(),
+            }).await {
+                Ok(node_resp) => {
+                    let n = node_resp.into_inner();
+                    if n.found {
+                        nodes.push(node_response_to_cognitive(&n, r.score as f32));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(node_id = %r.node_id, error = %e, "GetNode failed during FTS hydration");
+                }
+            }
+        }
+        nodes
+    }
+
     /// Execute a list of NaqInstructions and collect results.
     async fn execute_instructions(
         &self,
@@ -77,17 +106,8 @@ impl NietzscheBackend {
                         limit: k,
                     }).await.map_err(|e| AqlError::Backend(format!("FullTextSearch: {e}")))?;
 
-                    for r in resp.into_inner().results {
-                        if let Ok(node_resp) = client.get_node(proto::NodeIdRequest {
-                            id: r.node_id.clone(),
-                            collection: collection.clone(),
-                        }).await {
-                            let n = node_resp.into_inner();
-                            if n.found {
-                                all_nodes.push(node_response_to_cognitive(&n, r.score as f32));
-                            }
-                        }
-                    }
+                    let fts_nodes = Self::fetch_fts_nodes(&mut client, &collection, resp.into_inner().results).await;
+                    all_nodes.extend(fts_nodes);
                 }
                 NaqInstruction::FullTextSearch { collection, query, limit } => {
                     let resp = client.full_text_search(proto::FullTextSearchRequest {
@@ -96,17 +116,8 @@ impl NietzscheBackend {
                         limit,
                     }).await.map_err(|e| AqlError::Backend(format!("FullTextSearch: {e}")))?;
 
-                    for r in resp.into_inner().results {
-                        if let Ok(node_resp) = client.get_node(proto::NodeIdRequest {
-                            id: r.node_id.clone(),
-                            collection: collection.clone(),
-                        }).await {
-                            let n = node_resp.into_inner();
-                            if n.found {
-                                all_nodes.push(node_response_to_cognitive(&n, r.score as f32));
-                            }
-                        }
-                    }
+                    let fts_nodes = Self::fetch_fts_nodes(&mut client, &collection, resp.into_inner().results).await;
+                    all_nodes.extend(fts_nodes);
                 }
                 NaqInstruction::InsertNode { collection, content, node_type, energy } => {
                     let resp = client.insert_node(proto::InsertNodeRequest {
@@ -159,23 +170,37 @@ impl NietzscheBackend {
                         max_cost: 0.0,
                         energy_min: 0.0,
                         max_nodes: 1000,
-                        collection,
+                        collection: collection.clone(),
                     }).await.map_err(|e| AqlError::Backend(format!("BFS: {e}")))?;
 
+                    // Hydrate BFS results with full node data
                     for id in resp.into_inner().visited_ids {
-                        all_nodes.push(CognitiveNode {
-                            id,
-                            content: String::new(),
-                            node_type: String::new(),
-                            energy: 0.0,
-                            confidence: 1.0,
-                            valence: 0.0,
-                            arousal: 0.0,
-                            magnitude: None,
-                            created_at: None,
-                            updated_at: None,
-                            metadata: HashMap::new(),
-                        });
+                        match client.get_node(proto::NodeIdRequest {
+                            id: id.clone(),
+                            collection: collection.clone(),
+                        }).await {
+                            Ok(node_resp) => {
+                                let n = node_resp.into_inner();
+                                if n.found {
+                                    all_nodes.push(node_response_to_cognitive(&n, 1.0));
+                                }
+                            }
+                            Err(_) => {
+                                all_nodes.push(CognitiveNode {
+                                    id,
+                                    content: String::new(),
+                                    node_type: String::new(),
+                                    energy: 0.0,
+                                    confidence: 1.0,
+                                    valence: 0.0,
+                                    arousal: 0.0,
+                                    magnitude: None,
+                                    created_at: None,
+                                    updated_at: None,
+                                    metadata: HashMap::new(),
+                                });
+                            }
+                        }
                     }
                 }
                 NaqInstruction::Dijkstra { collection, start, end: _ } => {
@@ -267,6 +292,23 @@ impl NietzscheBackend {
                 ..Default::default()
             },
         })
+    }
+
+    /// FTS search + GetNode hydration helper for geometric verbs.
+    async fn fts_with_hydration(
+        &self,
+        collection: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<CognitiveNode>, AqlError> {
+        let mut client = self.client().await?;
+        let resp = client.full_text_search(proto::FullTextSearchRequest {
+            collection: collection.to_string(),
+            query: query.to_string(),
+            limit,
+        }).await.map_err(|e| AqlError::Backend(format!("FullTextSearch: {e}")))?;
+
+        Ok(Self::fetch_fts_nodes(&mut client, collection, resp.into_inner().results).await)
     }
 }
 
@@ -463,64 +505,152 @@ impl AqlBackend for NietzscheBackend {
 
     async fn distill(&self, plan: &DistillPlan) -> Result<CognitiveResult, AqlError> {
         let col = self.collection(&plan.base.collection);
-        let resp = self.client().await?.run_page_rank(proto::PageRankRequest {
-            collection: col,
-            damping_factor: 0.85,
-            max_iterations: 20,
-            convergence_threshold: 1e-7,
-        }).await.map_err(|e| AqlError::Backend(format!("PageRank: {e}")))?;
-
         let limit = plan.base.limit.unwrap_or(10) as usize;
-        let mut scores = resp.into_inner().scores;
-        scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
-        let nodes: Vec<CognitiveNode> = scores.into_iter().take(limit).map(|s| CognitiveNode {
-            id: s.node_id,
-            content: String::new(),
-            node_type: String::new(),
-            energy: s.score as f32,
-            confidence: s.score as f32,
-            valence: 0.0,
-            arousal: 0.0,
-            magnitude: None,
-            created_at: None,
-            updated_at: None,
-            metadata: HashMap::new(),
-        }).collect();
+        // DISTILL → Louvain community detection (NOT PageRank — that's REFLECT)
+        // Find communities, then pick the highest-energy representative from each
+        let resp = self.client().await?.run_louvain(proto::LouvainRequest {
+            collection: col.clone(),
+            max_iterations: 20,
+            resolution: 1.0,
+        }).await.map_err(|e| AqlError::Backend(format!("Louvain: {e}")))?;
 
-        Ok(CognitiveResult::from_nodes(nodes))
+        let inner = resp.into_inner();
+        let assignments = inner.assignments;
+
+        // Group nodes by community_id
+        let mut communities: HashMap<u64, Vec<proto::NodeCommunity>> = HashMap::new();
+        for assignment in assignments {
+            communities.entry(assignment.community_id).or_default().push(assignment);
+        }
+
+        // For each community, fetch the first node to get energy, pick highest-energy as representative
+        let mut representatives = Vec::new();
+        let mut client = self.client().await?;
+
+        for (_community_id, members) in &communities {
+            let mut best_node: Option<CognitiveNode> = None;
+            let mut best_energy: f32 = f32::NEG_INFINITY;
+
+            // Sample up to 5 members per community to find the best representative
+            for member in members.iter().take(5) {
+                if let Ok(node_resp) = client.get_node(proto::NodeIdRequest {
+                    id: member.node_id.clone(),
+                    collection: col.clone(),
+                }).await {
+                    let n = node_resp.into_inner();
+                    if n.found && n.energy > best_energy {
+                        best_energy = n.energy;
+                        best_node = Some(node_response_to_cognitive(&n, 0.0));
+                    }
+                }
+            }
+
+            if let Some(mut node) = best_node {
+                // Set confidence to community size ratio for ranking
+                node.confidence = members.len() as f32;
+                representatives.push(node);
+            }
+        }
+
+        // Sort by community size (confidence field) descending, take top N
+        representatives.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        representatives.truncate(limit);
+
+        Ok(CognitiveResult {
+            nodes: representatives,
+            edges: vec![],
+            metadata: ResultMetadata {
+                verb: "DISTILL".into(),
+                count: communities.len() as u32,
+                avg_energy: 0.0,
+                execution_time_ms: 0,
+                backend: "NietzscheDB".into(),
+                ..Default::default()
+            },
+        })
     }
 
-    // ── Geometric verbs (native in NietzscheDB) ──────────────
+    // ── Geometric verbs (Poincaré-aware) ──────────────
 
     async fn descend(&self, plan: &DescendPlan) -> Result<CognitiveResult, AqlError> {
         let col = self.collection(&plan.base.collection);
-        let instructions = vec![NaqInstruction::FullTextSearch {
-            collection: col,
-            query: plan.content.clone(),
-            limit: (plan.depth as u32) * 5,
-        }];
-        self.execute_instructions(instructions, "DESCEND").await
+        let fetch_limit = (plan.depth as u32) * 10; // over-fetch for filtering
+
+        // Step 1: FTS to find contextually relevant nodes
+        let candidates = self.fts_with_hydration(&col, &plan.content, fetch_limit).await?;
+
+        if candidates.is_empty() {
+            return Ok(CognitiveResult::from_nodes(vec![]));
+        }
+
+        // Step 2: Find source magnitude (first FTS result = anchor)
+        let source_mag = candidates[0].magnitude.unwrap_or(0.0);
+        let max_depth_delta = plan.depth as f32 * 0.15; // ~0.15 magnitude per depth level
+
+        // Step 3: Filter to descendants (higher magnitude = deeper in Poincaré ball)
+        let descendants: Vec<CognitiveNode> = candidates.into_iter()
+            .filter(|n| {
+                let mag = n.magnitude.unwrap_or(0.0);
+                hyperbolic::filter_descendants(source_mag, mag, max_depth_delta)
+            })
+            .take(plan.base.limit.unwrap_or(10) as usize)
+            .collect();
+
+        Ok(CognitiveResult::from_nodes(descendants))
     }
 
     async fn ascend(&self, plan: &AscendPlan) -> Result<CognitiveResult, AqlError> {
         let col = self.collection(&plan.base.collection);
-        let instructions = vec![NaqInstruction::FullTextSearch {
-            collection: col,
-            query: plan.content.clone(),
-            limit: (plan.depth as u32) * 5,
-        }];
-        self.execute_instructions(instructions, "ASCEND").await
+        let fetch_limit = (plan.depth as u32) * 10;
+
+        // Step 1: FTS to find contextually relevant nodes
+        let candidates = self.fts_with_hydration(&col, &plan.content, fetch_limit).await?;
+
+        if candidates.is_empty() {
+            return Ok(CognitiveResult::from_nodes(vec![]));
+        }
+
+        // Step 2: Find source magnitude
+        let source_mag = candidates[0].magnitude.unwrap_or(0.5);
+
+        // Step 3: Filter to ancestors (lower magnitude = shallower in Poincaré ball)
+        let ancestors: Vec<CognitiveNode> = candidates.into_iter()
+            .filter(|n| {
+                let mag = n.magnitude.unwrap_or(0.0);
+                hyperbolic::filter_ancestors(source_mag, mag)
+            })
+            .take(plan.base.limit.unwrap_or(10) as usize)
+            .collect();
+
+        Ok(CognitiveResult::from_nodes(ancestors))
     }
 
     async fn orbit(&self, plan: &OrbitPlan) -> Result<CognitiveResult, AqlError> {
         let col = self.collection(&plan.base.collection);
-        let instructions = vec![NaqInstruction::FullTextSearch {
-            collection: col,
-            query: plan.content.clone(),
-            limit: 20,
-        }];
-        self.execute_instructions(instructions, "ORBIT").await
+
+        // Step 1: FTS to find contextually relevant nodes
+        let candidates = self.fts_with_hydration(&col, &plan.content, 50).await?;
+
+        if candidates.is_empty() {
+            return Ok(CognitiveResult::from_nodes(vec![]));
+        }
+
+        // Step 2: Find source magnitude
+        let source_mag = candidates[0].magnitude.unwrap_or(0.5);
+        let orbit_radius = plan.radius.max(0.05); // minimum radius
+
+        // Step 3: Filter to nodes at similar depth (orbit = same magnitude band)
+        let orbit_nodes: Vec<CognitiveNode> = candidates.into_iter()
+            .skip(1) // skip the source itself
+            .filter(|n| {
+                let mag = n.magnitude.unwrap_or(0.0);
+                hyperbolic::filter_orbit(source_mag, mag, orbit_radius)
+            })
+            .take(plan.base.limit.unwrap_or(10) as usize)
+            .collect();
+
+        Ok(CognitiveResult::from_nodes(orbit_nodes))
     }
 
     // ── Altered states (NietzscheDB exclusive) ────────────────

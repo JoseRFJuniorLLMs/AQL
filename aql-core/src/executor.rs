@@ -8,13 +8,17 @@ use crate::result::{CognitiveResult, Explanation, WatchHandle};
 use crate::traits::AqlBackend;
 use crate::memory::WorkingMemory;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The main executor that dispatches plans to backends.
+/// Default query timeout: 30 seconds.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct AqlExecutor {
     backend: Arc<dyn AqlBackend>,
     memory: WorkingMemory,
     max_parallel: usize,
+    timeout: Duration,
 }
 
 impl AqlExecutor {
@@ -23,6 +27,7 @@ impl AqlExecutor {
             backend,
             memory: WorkingMemory::new(),
             max_parallel: 8,
+            timeout: DEFAULT_TIMEOUT,
         }
     }
 
@@ -31,9 +36,22 @@ impl AqlExecutor {
         self
     }
 
-    /// Execute a single plan.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Execute a single plan with timeout protection.
     pub fn execute<'a>(&'a mut self, plan: &'a ExecutionPlan) -> std::pin::Pin<Box<dyn std::future::Future<Output = AqlResult<CognitiveResult>> + Send + 'a>> {
-        Box::pin(self.execute_inner(plan))
+        Box::pin(self.execute_with_timeout(plan))
+    }
+
+    async fn execute_with_timeout(&mut self, plan: &ExecutionPlan) -> AqlResult<CognitiveResult> {
+        tokio::time::timeout(self.timeout, self.execute_inner(plan))
+            .await
+            .map_err(|_| AqlError::Execution(format!(
+                "query timed out after {}s", self.timeout.as_secs()
+            )))?
     }
 
     async fn execute_inner(&mut self, plan: &ExecutionPlan) -> AqlResult<CognitiveResult> {
