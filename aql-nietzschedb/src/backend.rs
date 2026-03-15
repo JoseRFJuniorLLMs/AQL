@@ -310,16 +310,43 @@ impl AqlBackend for NietzscheBackend {
 
     async fn fade(&self, plan: &FadePlan) -> Result<CognitiveResult, AqlError> {
         let col = self.collection(&plan.base.collection);
-        // FADE: query low-energy nodes, then decrement or delete
-        let instructions = vec![NaqInstruction::QueryNodes {
-            collection: col,
+        let threshold = plan.energy_decrement + plan.delete_threshold;
+        let decrement = plan.energy_decrement;
+        let delete_floor = plan.delete_threshold;
+
+        // Step 1: Find low-energy nodes
+        let query_instructions = vec![NaqInstruction::QueryNodes {
+            collection: col.clone(),
             nql: format!(
                 "MATCH (n) WHERE n.energy < {} RETURN n LIMIT 50",
-                plan.energy_decrement + plan.delete_threshold
+                threshold
             ),
             limit: 50,
         }];
-        self.execute_instructions(instructions, "FADE").await
+        let query_result = self.execute_instructions(query_instructions, "FADE_QUERY").await?;
+
+        // Step 2: Mutate each node — delete if below floor, else decrement energy
+        let mut mutation_instructions = Vec::new();
+        for node in &query_result.nodes {
+            let new_energy = node.energy - decrement;
+            if new_energy <= delete_floor {
+                mutation_instructions.push(NaqInstruction::DeleteNode {
+                    collection: col.clone(),
+                    node_id: node.id.clone(),
+                });
+            } else {
+                mutation_instructions.push(NaqInstruction::UpdateEnergy {
+                    collection: col.clone(),
+                    node_id: node.id.clone(),
+                    new_energy,
+                });
+            }
+        }
+
+        if mutation_instructions.is_empty() {
+            return Ok(query_result);
+        }
+        self.execute_instructions(mutation_instructions, "FADE").await
     }
 
     async fn associate(&self, plan: &AssociatePlan) -> Result<CognitiveResult, AqlError> {
@@ -336,13 +363,29 @@ impl AqlBackend for NietzscheBackend {
 
     async fn resonate(&self, plan: &ResonatePlan) -> Result<CognitiveResult, AqlError> {
         let col = self.collection(&plan.base.collection);
-        // RESONATE: FTS to find seed, then broader FTS as diffusion approximation
-        let instructions = vec![NaqInstruction::FullTextSearch {
-            collection: col,
+        let depth = plan.depth.unwrap_or(3) as u32;
+
+        // Step 1: Find seed node via FTS
+        let seed_instructions = vec![NaqInstruction::FullTextSearch {
+            collection: col.clone(),
             query: plan.query.clone(),
-            limit: plan.base.limit.unwrap_or(20),
+            limit: 1,
         }];
-        self.execute_instructions(instructions, "RESONATE").await
+        let seed_result = self.execute_instructions(seed_instructions, "RESONATE_SEED").await?;
+
+        if seed_result.nodes.is_empty() {
+            return Ok(seed_result);
+        }
+
+        let seed_id = seed_result.nodes[0].id.clone();
+
+        // Step 2: BFS from seed — activation spreading through graph
+        let bfs_instructions = vec![NaqInstruction::Bfs {
+            collection: col.clone(),
+            start: seed_id,
+            max_depth: depth,
+        }];
+        self.execute_instructions(bfs_instructions, "RESONATE").await
     }
 
     async fn trace(&self, plan: &TracePlan) -> Result<CognitiveResult, AqlError> {
