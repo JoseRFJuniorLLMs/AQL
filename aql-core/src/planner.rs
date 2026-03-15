@@ -46,8 +46,8 @@ impl PlannerConfig {
     pub fn apply_mood(&mut self, mood: MoodState) {
         match mood {
             MoodState::Creative => {
-                self.default_knn_k *= 2;
-                self.default_diffuse_depth += 2;
+                self.default_knn_k = (self.default_knn_k * 2).min(200);
+                self.default_diffuse_depth = (self.default_diffuse_depth + 2).min(20);
                 self.novelty_bias = 0.8;
             }
             MoodState::Analytical => {
@@ -65,7 +65,7 @@ impl PlannerConfig {
                 self.scope_override = Some(ContextScope::Session);
             }
             MoodState::Exploratory => {
-                self.default_knn_k *= 3;
+                self.default_knn_k = (self.default_knn_k * 3).min(200);
                 self.max_chain_depth = 10;
                 self.fade_suppressed = true;
             }
