@@ -9,6 +9,7 @@ use aql_core::error::AqlError;
 use aql_core::plans::*;
 use aql_core::result::*;
 use aql_core::traits::AqlBackend;
+use aql_core::types::{ArousalSpec, ValenceSpec};
 use std::collections::HashMap;
 use std::time::Instant;
 use tonic::transport::Channel;
@@ -359,6 +360,61 @@ fn node_response_to_cognitive(n: &proto::NodeResponse, score: f32) -> CognitiveN
     }
 }
 
+/// Apply post-filters from PlanBase qualifiers to a result set.
+/// Filters by confidence floor, valence, arousal, and recency.
+fn apply_qualifier_filters(result: &mut CognitiveResult, base: &PlanBase) {
+    // Filter by confidence floor
+    if let Some(floor) = base.confidence_floor {
+        result.nodes.retain(|n| n.energy >= floor);
+    }
+
+    // Filter by valence
+    if let Some(ref v) = base.valence {
+        result.nodes.retain(|n| match v {
+            ValenceSpec::Positive => n.valence > 0.0,
+            ValenceSpec::Negative => n.valence < 0.0,
+            ValenceSpec::Neutral => n.valence.abs() < 0.1,
+            ValenceSpec::Exact(target) => (n.valence - target).abs() < 0.2,
+        });
+    }
+
+    // Filter by arousal
+    if let Some(ref a) = base.arousal {
+        result.nodes.retain(|n| match a {
+            ArousalSpec::High => n.arousal >= 0.7,
+            ArousalSpec::Medium => n.arousal >= 0.3 && n.arousal < 0.7,
+            ArousalSpec::Low => n.arousal > 0.0 && n.arousal < 0.3,
+            ArousalSpec::Calm => n.arousal < 0.2,
+            ArousalSpec::Exact(target) => (n.arousal - target).abs() < 0.15,
+        });
+    }
+
+    // Filter by recency (using created_at timestamp if available)
+    if let Some(ref recency) = base.recency {
+        if let Some(window_secs) = recency.to_time_window_secs() {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let cutoff = now_secs.saturating_sub(window_secs as u64);
+            result.nodes.retain(|n| {
+                n.created_at
+                    .as_ref()
+                    .and_then(|ts| ts.parse::<u64>().ok())
+                    .map_or(true, |ts| ts >= cutoff)
+            });
+        }
+    }
+
+    // Enforce limit
+    if let Some(limit) = base.limit {
+        result.nodes.truncate(limit as usize);
+    }
+
+    // Update metadata counts
+    result.metadata.count = result.nodes.len() as u32;
+}
+
 #[async_trait]
 impl AqlBackend for NietzscheBackend {
     fn capabilities(&self) -> BackendCapabilities {
@@ -371,7 +427,9 @@ impl AqlBackend for NietzscheBackend {
 
     async fn recall(&self, plan: &RecallPlan) -> Result<CognitiveResult, AqlError> {
         let instructions = lower_recall(plan);
-        self.execute_instructions(instructions, "RECALL").await
+        let mut result = self.execute_instructions(instructions, "RECALL").await?;
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     async fn imprint(&self, plan: &ImprintPlan) -> Result<CognitiveResult, AqlError> {
@@ -418,43 +476,60 @@ impl AqlBackend for NietzscheBackend {
 
     async fn fade(&self, plan: &FadePlan) -> Result<CognitiveResult, AqlError> {
         let col = self.collection(&plan.base.collection);
-        let threshold = plan.energy_decrement + plan.delete_threshold;
         let decrement = plan.energy_decrement;
         let delete_floor = plan.delete_threshold;
 
-        // Step 1: Find low-energy nodes
-        let query_instructions = vec![NaqInstruction::QueryNodes {
-            collection: col.clone(),
-            nql: format!(
-                "MATCH (n) WHERE n.energy < {} RETURN n LIMIT 50",
-                threshold
-            ),
-            limit: 50,
-        }];
-        let query_result = self.execute_instructions(query_instructions, "FADE_QUERY").await?;
+        // Align with server semantics: FADE targets a single node.
+        // If the query looks like a UUID, target that node directly.
+        // Otherwise, use FTS to find the single best-matching node.
+        let target_node = if plan.query.len() == 36 && plan.query.contains('-') {
+            // Likely a UUID — fetch the node directly via NQL
+            let query_instructions = vec![NaqInstruction::QueryNodes {
+                collection: col.clone(),
+                nql: format!(
+                    "MATCH (n) WHERE n.id = \"{}\" RETURN n LIMIT 1",
+                    plan.query
+                ),
+                limit: 1,
+            }];
+            let result = self.execute_instructions(query_instructions, "FADE_LOOKUP").await?;
+            result.nodes.into_iter().next()
+        } else if !plan.query.is_empty() {
+            // Text query — find single best match via FTS
+            let query_instructions = vec![NaqInstruction::FullTextSearch {
+                collection: col.clone(),
+                query: plan.query.clone(),
+                limit: 1,
+            }];
+            let result = self.execute_instructions(query_instructions, "FADE_LOOKUP").await?;
+            result.nodes.into_iter().next()
+        } else {
+            return Err(AqlError::Backend("FADE requires a node ID or query text".into()));
+        };
 
-        // Step 2: Mutate each node — delete if below floor, else decrement energy
-        let mut mutation_instructions = Vec::new();
-        for node in &query_result.nodes {
-            let new_energy = node.energy - decrement;
-            if new_energy <= delete_floor {
-                mutation_instructions.push(NaqInstruction::DeleteNode {
-                    collection: col.clone(),
-                    node_id: node.id.clone(),
-                });
-            } else {
-                mutation_instructions.push(NaqInstruction::UpdateEnergy {
-                    collection: col.clone(),
-                    node_id: node.id.clone(),
-                    new_energy,
-                });
-            }
-        }
+        let node = match target_node {
+            Some(n) => n,
+            None => return Err(AqlError::Backend(format!(
+                "FADE: no node found for query '{}'", plan.query
+            ))),
+        };
 
-        if mutation_instructions.is_empty() {
-            return Ok(query_result);
-        }
-        self.execute_instructions(mutation_instructions, "FADE").await
+        // Apply fade: decrement energy or delete if below floor
+        let new_energy = node.energy - decrement;
+        let instructions = if new_energy <= delete_floor {
+            vec![NaqInstruction::DeleteNode {
+                collection: col.clone(),
+                node_id: node.id.clone(),
+            }]
+        } else {
+            vec![NaqInstruction::UpdateEnergy {
+                collection: col.clone(),
+                node_id: node.id.clone(),
+                new_energy,
+            }]
+        };
+
+        self.execute_instructions(instructions, "FADE").await
     }
 
     async fn associate(&self, plan: &AssociatePlan) -> Result<CognitiveResult, AqlError> {
@@ -493,12 +568,16 @@ impl AqlBackend for NietzscheBackend {
             start: seed_id,
             max_depth: depth,
         }];
-        self.execute_instructions(bfs_instructions, "RESONATE").await
+        let mut result = self.execute_instructions(bfs_instructions, "RESONATE").await?;
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     async fn trace(&self, plan: &TracePlan) -> Result<CognitiveResult, AqlError> {
         let instructions = lower_trace(plan);
-        self.execute_instructions(instructions, "TRACE").await
+        let mut result = self.execute_instructions(instructions, "TRACE").await?;
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     async fn reflect(&self, plan: &ReflectPlan) -> Result<CognitiveResult, AqlError> {
@@ -566,7 +645,9 @@ impl AqlBackend for NietzscheBackend {
             }
         }
 
-        Ok(CognitiveResult::from_nodes(nodes))
+        let mut result = CognitiveResult::from_nodes(nodes);
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     async fn distill(&self, plan: &DistillPlan) -> Result<CognitiveResult, AqlError> {
@@ -623,7 +704,7 @@ impl AqlBackend for NietzscheBackend {
         representatives.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
         representatives.truncate(limit);
 
-        Ok(CognitiveResult {
+        let mut result = CognitiveResult {
             nodes: representatives,
             edges: vec![],
             metadata: ResultMetadata {
@@ -634,7 +715,9 @@ impl AqlBackend for NietzscheBackend {
                 backend: "NietzscheDB".into(),
                 ..Default::default()
             },
-        })
+        };
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     // ── Geometric verbs (Poincaré-aware) ──────────────
@@ -663,7 +746,9 @@ impl AqlBackend for NietzscheBackend {
             .take(plan.base.limit.unwrap_or(10) as usize)
             .collect();
 
-        Ok(CognitiveResult::from_nodes(descendants))
+        let mut result = CognitiveResult::from_nodes(descendants);
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     async fn ascend(&self, plan: &AscendPlan) -> Result<CognitiveResult, AqlError> {
@@ -689,7 +774,9 @@ impl AqlBackend for NietzscheBackend {
             .take(plan.base.limit.unwrap_or(10) as usize)
             .collect();
 
-        Ok(CognitiveResult::from_nodes(ancestors))
+        let mut result = CognitiveResult::from_nodes(ancestors);
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     async fn orbit(&self, plan: &OrbitPlan) -> Result<CognitiveResult, AqlError> {
@@ -716,7 +803,9 @@ impl AqlBackend for NietzscheBackend {
             .take(plan.base.limit.unwrap_or(10) as usize)
             .collect();
 
-        Ok(CognitiveResult::from_nodes(orbit_nodes))
+        let mut result = CognitiveResult::from_nodes(orbit_nodes);
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     // ── Altered states (NietzscheDB exclusive) ────────────────
@@ -737,7 +826,9 @@ impl AqlBackend for NietzscheBackend {
             query: plan.premise.clone(),
             limit: plan.base.limit.unwrap_or(10),
         }];
-        self.execute_instructions(instructions, "IMAGINE").await
+        let mut result = self.execute_instructions(instructions, "IMAGINE").await?;
+        apply_qualifier_filters(&mut result, &plan.base);
+        Ok(result)
     }
 
     async fn watch(&self, _plan: &WatchPlan) -> Result<WatchHandle, AqlError> {

@@ -4,6 +4,20 @@
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
+/// Indicates whether a plan's query is a text search or a variable reference.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub enum QuerySource {
+    /// Normal text query — run FTS/KNN on this string.
+    #[default]
+    Text,
+    /// Reference to the previous result set (@results or @results[N]).
+    PreviousResults { index: Option<usize> },
+    /// Reference to the last DREAM result.
+    LastDream,
+    /// Reference to the last DELEGATE result.
+    DelegateResult,
+}
+
 /// Common fields shared by all plans.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlanBase {
@@ -16,6 +30,8 @@ pub struct PlanBase {
     pub arousal: Option<ArousalSpec>,
     pub mood: Option<MoodState>,
     pub evidence: Option<u32>,
+    /// How to resolve the query string — text search vs variable reference.
+    pub query_source: QuerySource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +196,14 @@ pub struct ExplainPlan {
     pub inner_query: String,
 }
 
+/// A conditional plan wrapping WHEN/ELSE logic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConditionalPlan {
+    pub condition: crate::ast::WhenClause,
+    pub then_plan: Box<ExecutionPlan>,
+    pub else_plan: Option<Box<ExecutionPlan>>,
+}
+
 /// The complete execution plan for a statement.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExecutionPlan {
@@ -198,6 +222,7 @@ pub enum ExecutionPlan {
     Imagine(ImaginePlan),
     Watch(WatchPlan),
     Explain(ExplainPlan),
+    Conditional(ConditionalPlan),
     Chain(Vec<ExecutionPlan>),
     Parallel {
         branches: Vec<ExecutionPlan>,

@@ -152,7 +152,7 @@ impl CognitivePlanner {
             }
         }
 
-        let base = self.build_base(&stmt.qualifiers);
+        let base = self.build_base(&stmt.subject, &stmt.qualifiers);
         let query = subject_to_query(&stmt.subject);
 
         let result = match stmt.verb {
@@ -276,12 +276,29 @@ impl CognitivePlanner {
         // Restore config so mood mutations don't leak into subsequent statements
         self.config = saved_config;
 
-        result
+        // Wrap in ConditionalPlan if WHEN clause is present
+        match (&stmt.condition, result) {
+            (Some(when_clause), Ok(then_plan)) => {
+                let else_plan = stmt
+                    .else_stmt
+                    .as_ref()
+                    .map(|e| self.plan_simple(e))
+                    .transpose()?
+                    .map(Box::new);
+                Ok(ExecutionPlan::Conditional(ConditionalPlan {
+                    condition: when_clause.clone(),
+                    then_plan: Box::new(then_plan),
+                    else_plan,
+                }))
+            }
+            (_, result) => result,
+        }
     }
 
-    fn build_base(&self, qualifiers: &[Qualifier]) -> PlanBase {
+    fn build_base(&self, subject: &Subject, qualifiers: &[Qualifier]) -> PlanBase {
         let mut base = PlanBase {
             collection: self.config.active_collection.clone(),
+            query_source: resolve_query_source(subject),
             ..Default::default()
         };
         for q in qualifiers {
@@ -384,4 +401,19 @@ fn extract_linking(qualifiers: &[Qualifier]) -> Option<String> {
         Qualifier::Linking(LinkTarget::Text(t)) => Some(t.clone()),
         _ => None,
     })
+}
+
+/// Determine query source from subject type.
+fn resolve_query_source(subject: &Subject) -> QuerySource {
+    match subject {
+        Subject::ResultsRef { index } => QuerySource::PreviousResults { index: *index },
+        Subject::LastDream => QuerySource::LastDream,
+        Subject::DelegateResult => QuerySource::DelegateResult,
+        // Also handle Text subjects that look like variable references
+        // (e.g., parser might produce Text("@results") instead of ResultsRef)
+        Subject::Text(t) if t.starts_with("@results") => QuerySource::PreviousResults { index: None },
+        Subject::Text(t) if t == "@last_dream" => QuerySource::LastDream,
+        Subject::Text(t) if t == "@delegate.result" => QuerySource::DelegateResult,
+        _ => QuerySource::Text,
+    }
 }

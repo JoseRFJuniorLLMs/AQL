@@ -1,7 +1,7 @@
 //! AqlExecutor — runs ExecutionPlans against a backend.
 //! Handles chains, parallel, atomic, conditionals.
 
-use crate::ast::Verb;
+use crate::ast::{ConditionValue, Verb, WhenClause};
 use crate::error::{AqlError, AqlResult};
 use crate::plans::*;
 use crate::result::{CognitiveResult, Explanation, WatchHandle};
@@ -54,21 +54,76 @@ impl AqlExecutor {
             )))?
     }
 
+    /// Resolve a variable-referenced query source into actual content from working memory.
+    /// Returns the node IDs or content as a comma-separated string for use in FTS fallback,
+    /// or None if it's a normal text query.
+    fn resolve_query_source(&self, base: &PlanBase) -> Option<CognitiveResult> {
+        match &base.query_source {
+            QuerySource::Text => None,
+            QuerySource::PreviousResults { index } => {
+                if let Some(idx) = index {
+                    self.memory.get_indexed_result(*idx).cloned()
+                } else {
+                    self.memory.last_result().cloned()
+                }
+            }
+            QuerySource::LastDream => self.memory.last_dream().cloned(),
+            QuerySource::DelegateResult => self.memory.delegate_result().cloned(),
+        }
+    }
+
     async fn execute_inner(&mut self, plan: &ExecutionPlan) -> AqlResult<CognitiveResult> {
         let start = Instant::now();
 
         let result = match plan {
-            ExecutionPlan::Recall(p) => self.backend.recall(p).await?,
-            ExecutionPlan::Resonate(p) => self.backend.resonate(p).await?,
+            ExecutionPlan::Recall(p) => {
+                // If query source is a variable reference, return resolved results directly
+                if let Some(resolved) = self.resolve_query_source(&p.base) {
+                    resolved
+                } else {
+                    self.backend.recall(p).await?
+                }
+            }
+            ExecutionPlan::Resonate(p) => {
+                if let Some(resolved) = self.resolve_query_source(&p.base) {
+                    resolved
+                } else {
+                    self.backend.resonate(p).await?
+                }
+            }
             ExecutionPlan::Reflect(p) => self.backend.reflect(p).await?,
             ExecutionPlan::Trace(p) => self.backend.trace(p).await?,
             ExecutionPlan::Imprint(p) => self.backend.imprint(p).await?,
             ExecutionPlan::Associate(p) => self.backend.associate(p).await?,
-            ExecutionPlan::Distill(p) => self.backend.distill(p).await?,
+            ExecutionPlan::Distill(p) => {
+                if let Some(resolved) = self.resolve_query_source(&p.base) {
+                    resolved
+                } else {
+                    self.backend.distill(p).await?
+                }
+            }
             ExecutionPlan::Fade(p) => self.backend.fade(p).await?,
-            ExecutionPlan::Descend(p) => self.backend.descend(p).await?,
-            ExecutionPlan::Ascend(p) => self.backend.ascend(p).await?,
-            ExecutionPlan::Orbit(p) => self.backend.orbit(p).await?,
+            ExecutionPlan::Descend(p) => {
+                if let Some(resolved) = self.resolve_query_source(&p.base) {
+                    resolved
+                } else {
+                    self.backend.descend(p).await?
+                }
+            }
+            ExecutionPlan::Ascend(p) => {
+                if let Some(resolved) = self.resolve_query_source(&p.base) {
+                    resolved
+                } else {
+                    self.backend.ascend(p).await?
+                }
+            }
+            ExecutionPlan::Orbit(p) => {
+                if let Some(resolved) = self.resolve_query_source(&p.base) {
+                    resolved
+                } else {
+                    self.backend.orbit(p).await?
+                }
+            }
             ExecutionPlan::Dream(p) => self.backend.dream(p).await?,
             ExecutionPlan::Imagine(p) => self.backend.imagine(p).await?,
             ExecutionPlan::Watch(p) => {
@@ -86,6 +141,9 @@ impl AqlExecutor {
             }
             ExecutionPlan::Parallel { branches, join } => {
                 self.execute_parallel(branches, join.as_deref()).await?
+            }
+            ExecutionPlan::Conditional(cp) => {
+                self.execute_conditional(cp).await?
             }
             ExecutionPlan::Atomic(plans) => {
                 self.execute_atomic(plans).await?
@@ -175,6 +233,53 @@ impl AqlExecutor {
         &self.memory
     }
 
+    /// Execute a conditional (WHEN/ELSE) plan.
+    async fn execute_conditional(&mut self, cp: &ConditionalPlan) -> AqlResult<CognitiveResult> {
+        if self.evaluate_condition(&cp.condition) {
+            self.execute(&cp.then_plan).await
+        } else if let Some(ref else_plan) = cp.else_plan {
+            self.execute(else_plan).await
+        } else {
+            Ok(CognitiveResult::empty())
+        }
+    }
+
+    /// Evaluate a WHEN condition against the last result in working memory.
+    fn evaluate_condition(&self, when: &WhenClause) -> bool {
+        let last = match self.memory.last_result() {
+            Some(r) => r,
+            None => return false,
+        };
+
+        // Resolve the field value from the last result's aggregate metadata
+        let field_val: Option<f64> = match when.field.as_str() {
+            "count" => Some(last.metadata.count as f64),
+            "avg_energy" => Some(last.metadata.avg_energy as f64),
+            "max_energy" => Some(last.metadata.max_energy as f64),
+            "min_confidence" => Some(last.metadata.min_confidence as f64),
+            "avg_confidence" => Some(last.metadata.avg_confidence as f64),
+            "execution_time_ms" => Some(last.metadata.execution_time_ms as f64),
+            // Also support checking fields on the first node
+            "energy" => last.nodes.first().map(|n| n.energy as f64),
+            "confidence" => last.nodes.first().map(|n| n.confidence as f64),
+            "valence" => last.nodes.first().map(|n| n.valence as f64),
+            "arousal" => last.nodes.first().map(|n| n.arousal as f64),
+            "magnitude" => last.nodes.first().and_then(|n| n.magnitude.map(|m| m as f64)),
+            _ => None,
+        };
+
+        let right_val: f64 = match &when.value {
+            ConditionValue::Float(f) => *f,
+            ConditionValue::Int(i) => *i as f64,
+            ConditionValue::Str(_) => return false, // string conditions not yet supported for numeric fields
+        };
+
+        match field_val {
+            Some(left) => when.op.eval_f64(left, right_val),
+            None => false,
+        }
+    }
+
     /// Get mutable working memory.
     pub fn memory_mut(&mut self) -> &mut WorkingMemory {
         &mut self.memory
@@ -200,6 +305,8 @@ async fn execute_single(
         ExecutionPlan::Orbit(p) => backend.orbit(p).await,
         ExecutionPlan::Dream(p) => backend.dream(p).await,
         ExecutionPlan::Imagine(p) => backend.imagine(p).await,
+        // Conditional/Chain/Parallel/Atomic require executor state (working memory),
+        // so they cannot be dispatched from a stateless parallel spawn context.
         _ => Ok(CognitiveResult::empty()),
     }
 }
