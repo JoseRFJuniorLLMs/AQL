@@ -196,8 +196,8 @@ impl CompOp {
             Self::Lte => left <= right,
             Self::Gt => left > right,
             Self::Lt => left < right,
-            Self::Eq => (left - right).abs() < f64::EPSILON,
-            Self::Neq => (left - right).abs() >= f64::EPSILON,
+            Self::Eq => (left - right).abs() < 1e-6,
+            Self::Neq => (left - right).abs() >= 1e-6,
         }
     }
 }

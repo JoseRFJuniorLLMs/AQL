@@ -233,10 +233,15 @@ impl NietzscheBackend {
                     // If a target is specified, truncate to only nodes up to
                     // and including the target (Dijkstra visits in cost order).
                     let visit_count = if !end.is_empty() {
-                        inner.visited_ids.iter()
-                            .position(|id| id == &end)
-                            .map(|pos| pos + 1) // include the target itself
-                            .unwrap_or(inner.visited_ids.len()) // target not found, return all
+                        match inner.visited_ids.iter().position(|id| id == &end) {
+                            Some(pos) => pos + 1, // include the target itself
+                            None => {
+                                // Target unreachable — return empty result instead of all visited nodes
+                                tracing::warn!(target = %end, visited = inner.visited_ids.len(),
+                                    "TRACE target unreachable via Dijkstra");
+                                0
+                            }
+                        }
                     } else {
                         inner.visited_ids.len()
                     };
@@ -274,7 +279,10 @@ impl NietzscheBackend {
                         }
                     }
                 }
-                NaqInstruction::TriggerDream { collection, topic: _ } => {
+                NaqInstruction::TriggerDream { collection, topic } => {
+                    if !topic.is_empty() {
+                        tracing::warn!(topic = %topic, "DREAM topic provided but TriggerSleep gRPC has no topic parameter — running generic sleep");
+                    }
                     let resp = client.trigger_sleep(proto::SleepRequest {
                         collection,
                         noise: 0.02,
@@ -357,16 +365,38 @@ impl NietzscheBackend {
 }
 
 /// Convert a NodeResponse (flat proto) to CognitiveNode.
+/// Extracts valence/arousal from the content JSON (not proto fields — they don't exist there).
 fn node_response_to_cognitive(n: &proto::NodeResponse, score: f32) -> CognitiveNode {
-    let content = String::from_utf8_lossy(&n.content).to_string();
+    let content_str = String::from_utf8_lossy(&n.content).to_string();
+
+    // Extract valence/arousal from content JSON if present
+    let (valence, arousal) = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content_str) {
+        let v = json.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let a = json.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        (v, a)
+    } else {
+        (0.0, 0.0)
+    };
+
+    // Extract display content: try "description" then "content" key, fallback to raw string
+    let display_content = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content_str) {
+        json.get("description")
+            .or_else(|| json.get("content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&content_str)
+            .to_string()
+    } else {
+        content_str
+    };
+
     CognitiveNode {
         id: n.id.clone(),
-        content,
+        content: display_content,
         node_type: n.node_type.clone(),
         energy: n.energy,
         confidence: score,
-        valence: 0.0,
-        arousal: 0.0,
+        valence,
+        arousal,
         magnitude: Some(n.depth), // depth field = magnitude in Poincaré
         created_at: if n.created_at > 0 { Some(n.created_at.to_string()) } else { None },
         updated_at: None,
@@ -377,9 +407,12 @@ fn node_response_to_cognitive(n: &proto::NodeResponse, score: f32) -> CognitiveN
 /// Apply post-filters from PlanBase qualifiers to a result set.
 /// Filters by confidence floor, valence, arousal, and recency.
 fn apply_qualifier_filters(result: &mut CognitiveResult, base: &PlanBase) {
-    // Filter by confidence floor
+    // Filter by confidence floor (use confidence if set, else fall back to energy)
     if let Some(floor) = base.confidence_floor {
-        result.nodes.retain(|n| n.energy >= floor);
+        result.nodes.retain(|n| {
+            let c = if n.confidence > 0.0 { n.confidence } else { n.energy };
+            c >= floor
+        });
     }
 
     // Filter by valence

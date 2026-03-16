@@ -114,6 +114,7 @@ version = "2.0.0"
 dependencies = [
  "aql-core",
  "async-trait",
+ "futures",
  "prost",
  "serde",
  "serde_json",

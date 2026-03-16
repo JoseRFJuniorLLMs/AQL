@@ -74,21 +74,22 @@ pub fn lower_recall(plan: &RecallPlan) -> Vec<NaqInstruction> {
 
     let mut instructions = Vec::new();
 
-    // Emit KNN if embeddings are available (non-empty coords in plan)
     if plan.base.has_embeddings.unwrap_or(false) {
+        // KNN only — the backend execute_instructions() falls back to FTS internally
+        // if no embedding pipeline exists. Emitting both produces duplicate results.
         instructions.push(NaqInstruction::KnnSearch {
-            collection: collection.clone(),
+            collection,
             query_text: plan.query.clone(),
             k: limit,
         });
+    } else {
+        // FTS primary (no embeddings available)
+        instructions.push(NaqInstruction::FullTextSearch {
+            collection,
+            query: plan.query.clone(),
+            limit,
+        });
     }
-
-    // Always emit FTS as fallback (or primary if no embeddings)
-    instructions.push(NaqInstruction::FullTextSearch {
-        collection,
-        query: plan.query.clone(),
-        limit,
-    });
 
     instructions
 }

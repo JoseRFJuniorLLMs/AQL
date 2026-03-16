@@ -124,7 +124,11 @@ impl AqlExecutor {
                     self.backend.orbit(p).await?
                 }
             }
-            ExecutionPlan::Dream(p) => self.backend.dream(p).await?,
+            ExecutionPlan::Dream(p) => {
+                let dream_result = self.backend.dream(p).await?;
+                self.memory.set_dream_result(dream_result.clone());
+                dream_result
+            }
             ExecutionPlan::Imagine(p) => self.backend.imagine(p).await?,
             ExecutionPlan::Watch(p) => {
                 let handle = self.backend.watch(p).await?;
@@ -137,16 +141,38 @@ impl AqlExecutor {
                 CognitiveResult::empty()
             }
             ExecutionPlan::Chain(plans) => {
-                self.execute_chain(plans).await?
+                let r = self.execute_chain(plans).await?;
+                // Chain sub-plans already pushed their results via execute();
+                // skip the push below to avoid duplicating the last step.
+                let elapsed = start.elapsed().as_millis() as u64;
+                let mut result = r;
+                result.metadata.execution_time_ms = elapsed;
+                result.metadata.backend = self.backend.name().to_string();
+                return Ok(result);
             }
             ExecutionPlan::Parallel { branches, join } => {
-                self.execute_parallel(branches, join.as_deref()).await?
+                let r = self.execute_parallel(branches, join.as_deref()).await?;
+                let elapsed = start.elapsed().as_millis() as u64;
+                let mut result = r;
+                result.metadata.execution_time_ms = elapsed;
+                result.metadata.backend = self.backend.name().to_string();
+                return Ok(result);
             }
             ExecutionPlan::Conditional(cp) => {
-                self.execute_conditional(cp).await?
+                let r = self.execute_conditional(cp).await?;
+                let elapsed = start.elapsed().as_millis() as u64;
+                let mut result = r;
+                result.metadata.execution_time_ms = elapsed;
+                result.metadata.backend = self.backend.name().to_string();
+                return Ok(result);
             }
             ExecutionPlan::Atomic(plans) => {
-                self.execute_atomic(plans).await?
+                let r = self.execute_atomic(plans).await?;
+                let elapsed = start.elapsed().as_millis() as u64;
+                let mut result = r;
+                result.metadata.execution_time_ms = elapsed;
+                result.metadata.backend = self.backend.name().to_string();
+                return Ok(result);
             }
         };
 
@@ -155,7 +181,7 @@ impl AqlExecutor {
         result.metadata.execution_time_ms = elapsed;
         result.metadata.backend = self.backend.name().to_string();
 
-        // Store in working memory
+        // Store in working memory (only for leaf plans — compound plans already stored)
         self.memory.push_result(result.clone());
 
         Ok(result)
@@ -307,6 +333,8 @@ async fn execute_single(
         ExecutionPlan::Imagine(p) => backend.imagine(p).await,
         // Conditional/Chain/Parallel/Atomic require executor state (working memory),
         // so they cannot be dispatched from a stateless parallel spawn context.
-        _ => Ok(CognitiveResult::empty()),
+        _ => Err(AqlError::Execution(
+            "compound plans (Chain/Parallel/Conditional/Atomic) cannot run inside parallel branches".to_string(),
+        )),
     }
 }
