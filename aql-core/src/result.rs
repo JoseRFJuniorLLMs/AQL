@@ -68,7 +68,7 @@ impl CognitiveResult {
         let max_energy = nodes
             .iter()
             .map(|n| n.energy)
-            .fold(0.0f32, f32::max);
+            .fold(f32::NEG_INFINITY, f32::max);
         let avg_confidence = if nodes.is_empty() {
             0.0
         } else {

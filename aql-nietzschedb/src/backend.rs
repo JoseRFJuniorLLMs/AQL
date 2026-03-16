@@ -595,11 +595,11 @@ impl AqlBackend for NietzscheBackend {
         let col = self.collection(&plan.base.collection);
         let depth = plan.depth.unwrap_or(3) as u32;
 
-        // Step 1: Find seed node via FTS
+        // Step 1: Find multiple seed candidates via FTS (matches server multi-seed approach)
         let seed_instructions = vec![NaqInstruction::FullTextSearch {
             collection: col.clone(),
             query: plan.query.clone(),
-            limit: 1,
+            limit: 5,
         }];
         let seed_result = self.execute_instructions(seed_instructions, "RESONATE_SEED").await?;
 
@@ -607,17 +607,23 @@ impl AqlBackend for NietzscheBackend {
             return Ok(seed_result);
         }
 
-        let seed_id = seed_result.nodes[0].id.clone();
+        // Step 2: Try BFS from each seed — pick the one with most neighbors
+        let mut best_result = CognitiveResult::empty();
+        for seed in &seed_result.nodes {
+            let bfs_instructions = vec![NaqInstruction::Bfs {
+                collection: col.clone(),
+                start: seed.id.clone(),
+                max_depth: depth,
+            }];
+            let candidate = self.execute_instructions(bfs_instructions, "RESONATE").await?;
+            if candidate.nodes.len() > best_result.nodes.len() {
+                best_result = candidate;
+                if best_result.nodes.len() > 1 { break; } // found connected subgraph
+            }
+        }
 
-        // Step 2: BFS from seed — activation spreading through graph
-        let bfs_instructions = vec![NaqInstruction::Bfs {
-            collection: col.clone(),
-            start: seed_id,
-            max_depth: depth,
-        }];
-        let mut result = self.execute_instructions(bfs_instructions, "RESONATE").await?;
-        apply_qualifier_filters(&mut result, &plan.base);
-        Ok(result)
+        apply_qualifier_filters(&mut best_result, &plan.base);
+        Ok(best_result)
     }
 
     async fn trace(&self, plan: &TracePlan) -> Result<CognitiveResult, AqlError> {
