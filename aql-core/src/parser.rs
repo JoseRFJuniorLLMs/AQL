@@ -12,6 +12,15 @@ use crate::types::*;
 #[grammar = "grammar.pest"]
 struct AqlParser;
 
+/// Helper: build a Parse error with a contextual message.
+fn parse_err(message: impl Into<String>) -> AqlError {
+    AqlError::Parse {
+        line: 0,
+        col: 0,
+        message: message.into(),
+    }
+}
+
 /// Parse an AQL source string into a Program AST.
 pub fn parse(input: &str) -> AqlResult<Program> {
     let pairs = AqlParser::parse(Rule::program, input).map_err(|e| {
@@ -46,7 +55,8 @@ pub fn parse(input: &str) -> AqlResult<Program> {
 fn parse_statement(pair: pest::iterators::Pair<Rule>) -> AqlResult<Option<Statement>> {
     match pair.as_rule() {
         Rule::statement => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = pair.into_inner().next()
+                .ok_or_else(|| parse_err("expected inner statement"))?;
             parse_statement(inner)
         }
         Rule::chain_statement => parse_chain_statement(pair).map(Some),
@@ -55,7 +65,8 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> AqlResult<Option<Statem
         Rule::watch_statement => parse_watch_statement(pair).map(Some),
         Rule::explain_statement => parse_explain_statement(pair).map(Some),
         Rule::verb_statement => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = pair.into_inner().next()
+                .ok_or_else(|| parse_err("expected inner verb statement"))?;
             parse_statement(inner)
         }
         Rule::conditional_statement => parse_conditional(pair).map(Some),
@@ -80,6 +91,9 @@ fn parse_chain_statement(pair: pest::iterators::Pair<Rule>) -> AqlResult<Stateme
             _ => {}
         }
     }
+    if steps.is_empty() {
+        return Err(parse_err("chain statement must have at least one step"));
+    }
     if steps.len() == 1 {
         Ok(Statement::Simple(steps.remove(0)))
     } else {
@@ -103,6 +117,10 @@ fn parse_parallel_block(pair: pest::iterators::Pair<Rule>) -> AqlResult<Statemen
             Rule::AND | Rule::THEN => {}
             _ => {}
         }
+    }
+
+    if branches.is_empty() {
+        return Err(parse_err("parallel block must have at least one branch"));
     }
 
     Ok(Statement::Parallel(ParallelStatement {
@@ -170,13 +188,16 @@ fn parse_explain_statement(pair: pest::iterators::Pair<Rule>) -> AqlResult<State
         }
     }
     Ok(Statement::Explain(ExplainStatement {
-        inner: Box::new(inner_stmt.unwrap()),
+        inner: Box::new(inner_stmt
+            .ok_or_else(|| parse_err("EXPLAIN requires a statement"))?),
     }))
 }
 
 fn parse_conditional(pair: pest::iterators::Pair<Rule>) -> AqlResult<Statement> {
     let mut parts = pair.into_inner();
-    let main_stmt = parse_simple_statement(parts.next().unwrap())?;
+    let first = parts.next()
+        .ok_or_else(|| parse_err("conditional statement requires a main statement"))?;
+    let main_stmt = parse_simple_statement(first)?;
     let mut condition = None;
     let mut else_stmt = None;
 
@@ -270,7 +291,8 @@ fn parse_simple_statement(pair: pest::iterators::Pair<Rule>) -> AqlResult<Simple
 }
 
 fn parse_verb(pair: pest::iterators::Pair<Rule>) -> AqlResult<Verb> {
-    let inner = pair.into_inner().next().unwrap();
+    let inner = pair.into_inner().next()
+        .ok_or_else(|| parse_err("expected verb keyword"))?;
     Ok(match inner.as_rule() {
         Rule::RECALL => Verb::Recall,
         Rule::RESONATE => Verb::Resonate,
@@ -296,14 +318,19 @@ fn parse_verb(pair: pest::iterators::Pair<Rule>) -> AqlResult<Verb> {
 }
 
 fn parse_subject(pair: pest::iterators::Pair<Rule>) -> AqlResult<Subject> {
-    let inner = pair.into_inner().next().unwrap();
+    let inner = pair.into_inner().next()
+        .ok_or_else(|| parse_err("expected subject"))?;
     Ok(match inner.as_rule() {
         Rule::trace_range => {
             let mut parts = inner.into_inner();
             let _from_kw = parts.next(); // FROM
-            let from = strip_quotes(parts.next().unwrap().as_str());
+            let from = parts.next()
+                .map(|p| strip_quotes(p.as_str()))
+                .ok_or_else(|| parse_err("TRACE range missing FROM value"))?;
             let _to_kw = parts.next(); // TO
-            let to = strip_quotes(parts.next().unwrap().as_str());
+            let to = parts.next()
+                .map(|p| strip_quotes(p.as_str()))
+                .ok_or_else(|| parse_err("TRACE range missing TO value"))?;
             Subject::TraceRange { from, to }
         }
         Rule::about_subject => {
@@ -320,13 +347,19 @@ fn parse_subject(pair: pest::iterators::Pair<Rule>) -> AqlResult<Subject> {
         }
         Rule::type_with_content => {
             let mut parts = inner.into_inner();
-            let etype = parse_epistemic_type(parts.next().unwrap())?;
-            let content = strip_quotes(parts.next().unwrap().as_str());
+            let etype_pair = parts.next()
+                .ok_or_else(|| parse_err("type_with_content missing epistemic type"))?;
+            let etype = parse_epistemic_type(etype_pair)?;
+            let content_pair = parts.next()
+                .ok_or_else(|| parse_err("type_with_content missing content string"))?;
+            let content = strip_quotes(content_pair.as_str());
             Subject::TypeWithContent { etype, content }
         }
         Rule::self_ref => Subject::SelfRef,
         Rule::agent_ref => {
-            let name = strip_quotes(inner.into_inner().last().unwrap().as_str());
+            let name = inner.into_inner().last()
+                .map(|p| strip_quotes(p.as_str()))
+                .ok_or_else(|| parse_err("agent_ref missing agent name"))?;
             Subject::AgentRef(name)
         }
         Rule::results_ref => {
@@ -342,11 +375,15 @@ fn parse_subject(pair: pest::iterators::Pair<Rule>) -> AqlResult<Subject> {
             }
         }
         Rule::text => {
-            let s = strip_quotes(inner.into_inner().next().unwrap().as_str());
+            let s = inner.into_inner().next()
+                .map(|p| strip_quotes(p.as_str()))
+                .ok_or_else(|| parse_err("text subject missing string content"))?;
             Subject::Text(s)
         }
         Rule::type_filter => {
-            let etype = parse_epistemic_type(inner.into_inner().next().unwrap())?;
+            let etype_pair = inner.into_inner().next()
+                .ok_or_else(|| parse_err("type_filter missing epistemic type"))?;
+            let etype = parse_epistemic_type(etype_pair)?;
             Subject::TypeFilter(etype)
         }
         _ => Subject::SelfRef,
@@ -371,15 +408,18 @@ fn parse_epistemic_type(pair: pest::iterators::Pair<Rule>) -> AqlResult<Epistemi
 }
 
 fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
-    let inner = pair.into_inner().next().unwrap();
+    let inner = pair.into_inner().next()
+        .ok_or_else(|| parse_err("expected qualifier content"))?;
     Ok(match inner.as_rule() {
         Rule::confidence_q => {
             let val: f32 = inner.into_inner().find(|p| p.as_rule() == Rule::number)
-                .unwrap().as_str().parse().unwrap_or(0.5);
+                .ok_or_else(|| parse_err("CONFIDENCE missing number value"))?
+                .as_str().parse().unwrap_or(0.5);
             Qualifier::Confidence(val)
         }
         Rule::recency_q => {
-            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::recency_degree).unwrap();
+            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::recency_degree)
+                .ok_or_else(|| parse_err("RECENCY missing degree"))?;
             Qualifier::Recency(match deg.as_str() {
                 "fresh" => RecencyDegree::Fresh,
                 "recent" => RecencyDegree::Recent,
@@ -389,13 +429,14 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
         }
         Rule::depth_q => {
             let val: u8 = inner.into_inner().find(|p| p.as_rule() == Rule::integer)
-                .unwrap().as_str().parse().unwrap_or(3);
+                .ok_or_else(|| parse_err("DEPTH missing integer value"))?
+                .as_str().parse().unwrap_or(3);
             Qualifier::Depth(val)
         }
         Rule::within_q => {
             let inner_val = inner.into_inner().find(|p| {
                 matches!(p.as_rule(), Rule::scope | Rule::string)
-            }).unwrap();
+            }).ok_or_else(|| parse_err("WITHIN missing scope or string"))?;
             let scope = match inner_val.as_rule() {
                 Rule::scope => match inner_val.as_str() {
                     "session" => ContextScope::Session,
@@ -410,14 +451,15 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
         }
         Rule::as_q => {
             let etype = parse_epistemic_type(
-                inner.into_inner().find(|p| p.as_rule() == Rule::epistemic_type).unwrap()
+                inner.into_inner().find(|p| p.as_rule() == Rule::epistemic_type)
+                    .ok_or_else(|| parse_err("AS missing epistemic type"))?
             )?;
             Qualifier::As(etype)
         }
         Rule::linking_q => {
             let link_inner = inner.into_inner().find(|p| {
                 matches!(p.as_rule(), Rule::string | Rule::results_ref | Rule::self_ref)
-            }).unwrap();
+            }).ok_or_else(|| parse_err("LINKING missing target"))?;
             let target = match link_inner.as_rule() {
                 Rule::string => LinkTarget::Text(strip_quotes(link_inner.as_str())),
                 Rule::self_ref => LinkTarget::SelfRef,
@@ -432,7 +474,8 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
             Qualifier::Linking(target)
         }
         Rule::novelty_q => {
-            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::novelty_degree).unwrap();
+            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::novelty_degree)
+                .ok_or_else(|| parse_err("NOVELTY missing degree"))?;
             Qualifier::Novelty(match deg.as_str() {
                 "high" => NoveltyDegree::High,
                 "medium" => NoveltyDegree::Medium,
@@ -441,11 +484,13 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
         }
         Rule::limit_q => {
             let val: u32 = inner.into_inner().find(|p| p.as_rule() == Rule::integer)
-                .unwrap().as_str().parse().unwrap_or(10);
+                .ok_or_else(|| parse_err("LIMIT missing integer value"))?
+                .as_str().parse().unwrap_or(10);
             Qualifier::Limit(val)
         }
         Rule::magnitude_q => {
-            let range = inner.into_inner().find(|p| p.as_rule() == Rule::number_range).unwrap();
+            let range = inner.into_inner().find(|p| p.as_rule() == Rule::number_range)
+                .ok_or_else(|| parse_err("MAGNITUDE missing number range"))?;
             let nums: Vec<f32> = range.into_inner()
                 .filter(|p| p.as_rule() == Rule::number)
                 .map(|p| p.as_str().parse().unwrap_or(0.0))
@@ -453,7 +498,8 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
             Qualifier::Magnitude(nums.first().copied().unwrap_or(0.0), nums.get(1).copied().unwrap_or(1.0))
         }
         Rule::curvature_q => {
-            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::curvature_degree).unwrap();
+            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::curvature_degree)
+                .ok_or_else(|| parse_err("CURVATURE missing degree"))?;
             Qualifier::Curvature(match deg.as_str() {
                 "high" => CurvatureDegree::High,
                 "medium" => CurvatureDegree::Medium,
@@ -463,13 +509,14 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
         }
         Rule::radius_q => {
             let val: f32 = inner.into_inner().find(|p| p.as_rule() == Rule::number)
-                .unwrap().as_str().parse().unwrap_or(0.1);
+                .ok_or_else(|| parse_err("RADIUS missing number value"))?
+                .as_str().parse().unwrap_or(0.1);
             Qualifier::Radius(val)
         }
         Rule::valence_q => {
             let inner_val = inner.into_inner().find(|p| {
                 matches!(p.as_rule(), Rule::valence_polarity | Rule::number)
-            }).unwrap();
+            }).ok_or_else(|| parse_err("VALENCE missing polarity or number"))?;
             let spec = match inner_val.as_rule() {
                 Rule::valence_polarity => match inner_val.as_str() {
                     "positive" => ValenceSpec::Positive,
@@ -484,7 +531,7 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
         Rule::arousal_q => {
             let inner_val = inner.into_inner().find(|p| {
                 matches!(p.as_rule(), Rule::arousal_level | Rule::number)
-            }).unwrap();
+            }).ok_or_else(|| parse_err("AROUSAL missing level or number"))?;
             let spec = match inner_val.as_rule() {
                 Rule::arousal_level => match inner_val.as_str() {
                     "high" => ArousalSpec::High,
@@ -498,7 +545,8 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
             Qualifier::Arousal(spec)
         }
         Rule::mood_q => {
-            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::mood_state).unwrap();
+            let deg = inner.into_inner().find(|p| p.as_rule() == Rule::mood_state)
+                .ok_or_else(|| parse_err("MOOD missing state"))?;
             Qualifier::Mood(match deg.as_str() {
                 "creative" => MoodState::Creative,
                 "analytical" => MoodState::Analytical,
@@ -510,7 +558,8 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
         }
         Rule::evidence_q => {
             let val: u32 = inner.into_inner().find(|p| p.as_rule() == Rule::integer)
-                .unwrap().as_str().parse().unwrap_or(1);
+                .ok_or_else(|| parse_err("EVIDENCE missing integer value"))?
+                .as_str().parse().unwrap_or(1);
             Qualifier::Evidence(val)
         }
         Rule::with_agent_q => {
@@ -530,7 +579,8 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
             Qualifier::ToAgent(name)
         }
         Rule::policy_q => {
-            let pol = inner.into_inner().find(|p| p.as_rule() == Rule::policy_name).unwrap();
+            let pol = inner.into_inner().find(|p| p.as_rule() == Rule::policy_name)
+                .ok_or_else(|| parse_err("POLICY missing policy name"))?;
             Qualifier::Policy(match pol.as_str() {
                 "weighted_average" => ConflictPolicy::WeightedAverage,
                 "keep_higher" => ConflictPolicy::KeepHigher,
@@ -551,7 +601,8 @@ fn extract_simple(pair: pest::iterators::Pair<Rule>) -> AqlResult<SimpleStatemen
     match pair.as_rule() {
         Rule::simple_statement => parse_simple_statement(pair),
         Rule::verb_statement | Rule::conditional_statement => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = pair.into_inner().next()
+                .ok_or_else(|| parse_err("expected inner statement in extract_simple"))?;
             extract_simple(inner)
         }
         _ => parse_simple_statement(pair),
@@ -559,7 +610,16 @@ fn extract_simple(pair: pest::iterators::Pair<Rule>) -> AqlResult<SimpleStatemen
 }
 
 fn strip_quotes(s: &str) -> String {
-    s.trim_matches('"').to_string()
+    let s = s.trim_matches('"');
+    // Handle basic escape sequences inside strings
+    if s.contains('\\') {
+        s.replace("\\\"", "\"")
+         .replace("\\\\", "\\")
+         .replace("\\n", "\n")
+         .replace("\\t", "\t")
+    } else {
+        s.to_string()
+    }
 }
 
 #[cfg(test)]
