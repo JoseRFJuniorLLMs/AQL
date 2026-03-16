@@ -58,32 +58,46 @@ impl NietzscheBackend {
         Ok(NietzscheDbClient::new(channel.clone()))
     }
 
-    /// Batch-fetch full nodes from FTS results (eliminates N+1 GetNode calls).
+    /// Batch-fetch full nodes from FTS results with concurrent GetNode calls.
+    /// Uses tokio::spawn for parallel gRPC hydration (bounded by result count).
     async fn fetch_fts_nodes(
         client: &mut NietzscheDbClient<Channel>,
         collection: &str,
         results: Vec<proto::FtsResultProto>,
     ) -> Vec<CognitiveNode> {
-        // Collect all node IDs first, then fetch in sequence (gRPC doesn't have batch GetNode)
-        // But we avoid silently dropping errors — we log and skip
-        let mut nodes = Vec::with_capacity(results.len());
-        for r in results {
-            match client.get_node(proto::NodeIdRequest {
-                id: r.node_id.clone(),
-                collection: collection.to_string(),
-            }).await {
-                Ok(node_resp) => {
-                    let n = node_resp.into_inner();
-                    if n.found {
-                        nodes.push(node_response_to_cognitive(&n, r.score as f32));
+        use futures::future::join_all;
+
+        let futs: Vec<_> = results
+            .into_iter()
+            .map(|r| {
+                let mut c = client.clone();
+                let col = collection.to_string();
+                async move {
+                    match c
+                        .get_node(proto::NodeIdRequest {
+                            id: r.node_id.clone(),
+                            collection: col,
+                        })
+                        .await
+                    {
+                        Ok(node_resp) => {
+                            let n = node_resp.into_inner();
+                            if n.found {
+                                Some(node_response_to_cognitive(&n, r.score as f32))
+                            } else {
+                                None
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(node_id = %r.node_id, error = %e, "GetNode failed during FTS hydration");
+                            None
+                        }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(node_id = %r.node_id, error = %e, "GetNode failed during FTS hydration");
-                }
-            }
-        }
-        nodes
+            })
+            .collect();
+
+        join_all(futs).await.into_iter().flatten().collect()
     }
 
     /// Execute a list of NaqInstructions and collect results.
