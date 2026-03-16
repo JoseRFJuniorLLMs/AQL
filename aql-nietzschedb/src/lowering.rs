@@ -72,13 +72,25 @@ pub fn lower_recall(plan: &RecallPlan) -> Vec<NaqInstruction> {
     let collection = plan.base.collection.clone().unwrap_or("default".into());
     let limit = plan.base.limit.unwrap_or(10);
 
-    // TODO: When embedding pipeline is available, emit KnnSearch here
-    // and keep FullTextSearch as a fallback with deduplication.
-    vec![NaqInstruction::FullTextSearch {
+    let mut instructions = Vec::new();
+
+    // Emit KNN if embeddings are available (non-empty coords in plan)
+    if plan.base.has_embeddings.unwrap_or(false) {
+        instructions.push(NaqInstruction::KnnSearch {
+            collection: collection.clone(),
+            query_text: plan.query.clone(),
+            k: limit,
+        });
+    }
+
+    // Always emit FTS as fallback (or primary if no embeddings)
+    instructions.push(NaqInstruction::FullTextSearch {
         collection,
         query: plan.query.clone(),
         limit,
-    }]
+    });
+
+    instructions
 }
 
 // NOTE: lower_imprint() was removed — it was dead code that incorrectly used

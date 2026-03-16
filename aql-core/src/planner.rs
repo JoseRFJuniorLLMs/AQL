@@ -399,6 +399,10 @@ fn extract_as_type(qualifiers: &[Qualifier]) -> Option<EpistemicType> {
 fn extract_linking(qualifiers: &[Qualifier]) -> Option<String> {
     qualifiers.iter().find_map(|q| match q {
         Qualifier::Linking(LinkTarget::Text(t)) => Some(t.clone()),
+        Qualifier::Linking(LinkTarget::ResultsRef { index }) => {
+            Some(format!("@results[{}]", index.unwrap_or(0)))
+        }
+        Qualifier::Linking(LinkTarget::SelfRef) => Some("@self".to_string()),
         _ => None,
     })
 }

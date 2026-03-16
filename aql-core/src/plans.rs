@@ -32,6 +32,8 @@ pub struct PlanBase {
     pub evidence: Option<u32>,
     /// How to resolve the query string — text search vs variable reference.
     pub query_source: QuerySource,
+    /// Whether embedding vectors are available for KNN search.
+    pub has_embeddings: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
