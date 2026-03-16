@@ -190,7 +190,8 @@ number_range     = { number ~ ".." ~ number }
 
 // ── Literals ─────────────────────────────────────────────────
 
-string  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+string  = @{ "\"" ~ (escape_seq | (!("\"" | "\\") ~ ANY))* ~ "\"" }
+escape_seq = { "\\" ~ ("\"" | "\\" | "n" | "t") }
 number  = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 integer = @{ ASCII_DIGIT+ }
 ident   = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }

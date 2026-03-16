@@ -103,6 +103,7 @@ pub struct AssociatePlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistillPlan {
     pub base: PlanBase,
+    pub query: String,
     pub type_filter: Option<EpistemicType>,
     pub depth: Option<u8>,
 }
@@ -110,6 +111,7 @@ pub struct DistillPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FadePlan {
     pub base: PlanBase,
+    pub query: String,
     pub type_filter: Option<EpistemicType>,
     pub energy_decrement: f32,
     pub delete_threshold: f32,
@@ -119,6 +121,7 @@ impl Default for FadePlan {
     fn default() -> Self {
         Self {
             base: PlanBase::default(),
+            query: String::new(),
             type_filter: None,
             energy_decrement: 0.2,
             delete_threshold: 0.05,

@@ -12,12 +12,22 @@ use crate::types::*;
 #[grammar = "grammar.pest"]
 struct AqlParser;
 
-/// Helper: build a Parse error with a contextual message.
+/// Helper: build a Parse error with a contextual message (no span info).
 fn parse_err(message: impl Into<String>) -> AqlError {
     AqlError::Parse {
         line: 0,
         col: 0,
         message: message.into(),
+    }
+}
+
+/// Helper: build a Parse error using the span from a pest Pair for line/col.
+fn parse_err_at(msg: &str, pair: &pest::iterators::Pair<Rule>) -> AqlError {
+    let (line, col) = pair.as_span().start_pos().line_col();
+    AqlError::Parse {
+        line,
+        col,
+        message: msg.to_string(),
     }
 }
 
@@ -308,11 +318,10 @@ fn parse_verb(pair: pest::iterators::Pair<Rule>) -> AqlResult<Verb> {
         Rule::DREAM => Verb::Dream,
         Rule::IMAGINE => Verb::Imagine,
         _ => {
-            return Err(AqlError::Parse {
-                line: 0,
-                col: 0,
-                message: format!("unknown verb: {:?}", inner.as_rule()),
-            })
+            return Err(parse_err_at(
+                &format!("unknown verb: {:?}", inner.as_rule()),
+                &inner,
+            ))
         }
     })
 }
@@ -398,11 +407,10 @@ fn parse_epistemic_type(pair: pest::iterators::Pair<Rule>) -> AqlResult<Epistemi
         "Signal" => EpistemicType::Signal,
         "Intention" => EpistemicType::Intention,
         other => {
-            return Err(AqlError::Parse {
-                line: 0,
-                col: 0,
-                message: format!("unknown epistemic type: {other}"),
-            })
+            return Err(parse_err_at(
+                &format!("unknown epistemic type: {other}"),
+                &pair,
+            ))
         }
     })
 }
@@ -428,10 +436,11 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
             })
         }
         Rule::depth_q => {
-            let val: u8 = inner.into_inner().find(|p| p.as_rule() == Rule::integer)
+            let val: u32 = inner.into_inner().find(|p| p.as_rule() == Rule::integer)
                 .ok_or_else(|| parse_err("DEPTH missing integer value"))?
                 .as_str().parse().unwrap_or(3);
-            Qualifier::Depth(val)
+            let clamped = val.min(50) as u8;
+            Qualifier::Depth(clamped)
         }
         Rule::within_q => {
             let inner_val = inner.into_inner().find(|p| {
@@ -600,7 +609,15 @@ fn parse_qualifier(pair: pest::iterators::Pair<Rule>) -> AqlResult<Qualifier> {
 fn extract_simple(pair: pest::iterators::Pair<Rule>) -> AqlResult<SimpleStatement> {
     match pair.as_rule() {
         Rule::simple_statement => parse_simple_statement(pair),
-        Rule::verb_statement | Rule::conditional_statement => {
+        Rule::conditional_statement => {
+            // Parse the full conditional preserving WHEN/ELSE
+            let stmt = parse_conditional(pair)?;
+            match stmt {
+                Statement::Simple(s) => Ok(s),
+                _ => Err(parse_err("expected simple statement from conditional")),
+            }
+        }
+        Rule::verb_statement => {
             let inner = pair.into_inner().next()
                 .ok_or_else(|| parse_err("expected inner statement in extract_simple"))?;
             extract_simple(inner)
@@ -610,15 +627,16 @@ fn extract_simple(pair: pest::iterators::Pair<Rule>) -> AqlResult<SimpleStatemen
 }
 
 fn strip_quotes(s: &str) -> String {
-    let s = s.trim_matches('"');
-    // Handle basic escape sequences inside strings
-    if s.contains('\\') {
-        s.replace("\\\"", "\"")
-         .replace("\\\\", "\\")
-         .replace("\\n", "\n")
-         .replace("\\t", "\t")
+    let inner = &s[1..s.len()-1];
+    // Process \\ first (via placeholder) to avoid double-processing
+    if inner.contains('\\') {
+        inner.replace("\\\\", "\x00")  // temp placeholder for literal backslash
+             .replace("\\\"", "\"")
+             .replace("\\n", "\n")
+             .replace("\\t", "\t")
+             .replace("\x00", "\\")    // restore literal backslash
     } else {
-        s.to_string()
+        inner.to_string()
     }
 }
 

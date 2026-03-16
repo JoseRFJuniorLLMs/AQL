@@ -216,6 +216,7 @@ impl CognitivePlanner {
             }
             Verb::Distill => Ok(ExecutionPlan::Distill(DistillPlan {
                 base,
+                query: query.clone(),
                 type_filter: extract_type_filter(&stmt.subject),
                 depth: extract_depth(&stmt.qualifiers),
             })),
@@ -226,8 +227,16 @@ impl CognitivePlanner {
                         reason: "FADE suppressed by current mood".into(),
                     })
                 } else {
+                    // FADE does not support FROM/TO range subjects
+                    if matches!(&stmt.subject, Subject::TraceRange { .. }) {
+                        return Err(AqlError::Planning {
+                            verb: Verb::Fade,
+                            reason: "FADE does not support FROM/TO range subjects".into(),
+                        });
+                    }
                     Ok(ExecutionPlan::Fade(FadePlan {
                         base,
+                        query: query.clone(),
                         type_filter: extract_type_filter(&stmt.subject),
                         ..Default::default()
                     }))
