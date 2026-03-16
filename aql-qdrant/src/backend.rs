@@ -6,6 +6,7 @@ use aql_core::error::AqlError;
 use aql_core::plans::*;
 use aql_core::result::*;
 use aql_core::traits::AqlBackend;
+use aql_core::types::Geometry;
 
 pub struct QdrantBackend {
     url: String,
@@ -24,7 +25,14 @@ impl QdrantBackend {
 #[async_trait]
 impl AqlBackend for QdrantBackend {
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities::qdrant()
+        BackendCapabilities {
+            geometry: Geometry::Euclidean,
+            has_vector_search: true,
+            has_full_text: true,
+            has_timestamps: true,
+            max_batch_size: 10_000,
+            ..BackendCapabilities::minimal()
+        }
     }
 
     fn name(&self) -> &str {

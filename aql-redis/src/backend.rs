@@ -6,6 +6,7 @@ use aql_core::error::AqlError;
 use aql_core::plans::*;
 use aql_core::result::*;
 use aql_core::traits::AqlBackend;
+use aql_core::types::Geometry;
 
 pub struct RedisBackend {
     url: String,
@@ -29,7 +30,15 @@ impl RedisBackend {
 #[async_trait]
 impl AqlBackend for RedisBackend {
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities::redis()
+        BackendCapabilities {
+            geometry: Geometry::None,
+            has_vector_search: true,
+            has_full_text: true,
+            has_ttl: true,
+            has_timestamps: true,
+            max_batch_size: 10_000,
+            ..BackendCapabilities::minimal()
+        }
     }
 
     fn name(&self) -> &str {

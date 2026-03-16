@@ -6,7 +6,6 @@
 
 pub mod backend;
 pub mod hyperbolic;
-pub mod dream;
 pub mod lowering;
 
 /// Generated gRPC client stubs for NietzscheDB proto.

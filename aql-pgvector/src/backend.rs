@@ -6,6 +6,7 @@ use aql_core::error::AqlError;
 use aql_core::plans::*;
 use aql_core::result::*;
 use aql_core::traits::AqlBackend;
+use aql_core::types::Geometry;
 
 pub struct PgVectorBackend {
     connection_string: String,
@@ -22,7 +23,18 @@ impl PgVectorBackend {
 #[async_trait]
 impl AqlBackend for PgVectorBackend {
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities::pgvector()
+        BackendCapabilities {
+            geometry: Geometry::Euclidean,
+            has_vector_search: true,
+            has_full_text: true,
+            has_edges: true,
+            has_typed_edges: true,
+            has_edge_weight: true,
+            has_timestamps: true,
+            max_batch_size: 50_000,
+            supports_atomic: true,
+            ..BackendCapabilities::minimal()
+        }
     }
 
     fn name(&self) -> &str {

@@ -6,6 +6,7 @@ use aql_core::error::AqlError;
 use aql_core::plans::*;
 use aql_core::result::*;
 use aql_core::traits::AqlBackend;
+use aql_core::types::Geometry;
 
 pub struct Neo4jBackend {
     uri: String,
@@ -29,7 +30,20 @@ impl Neo4jBackend {
 #[async_trait]
 impl AqlBackend for Neo4jBackend {
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities::neo4j()
+        BackendCapabilities {
+            geometry: Geometry::Euclidean,
+            has_vector_search: true,
+            has_full_text: true,
+            has_graph_algos: true,
+            has_edges: true,
+            has_typed_edges: true,
+            has_edge_weight: true,
+            has_traversal: true,
+            has_timestamps: true,
+            max_batch_size: 50_000,
+            supports_atomic: true,
+            ..BackendCapabilities::minimal()
+        }
     }
 
     fn name(&self) -> &str {

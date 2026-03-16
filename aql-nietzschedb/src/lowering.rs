@@ -64,57 +64,27 @@ pub enum NaqInstruction {
 }
 
 /// Lower a RecallPlan to NAQ instructions.
+///
+/// Only emits FullTextSearch because KnnSearch currently falls back to FTS
+/// in the backend (no real embedding pipeline yet). Emitting both would
+/// produce 2x identical FTS queries with duplicate results.
 pub fn lower_recall(plan: &RecallPlan) -> Vec<NaqInstruction> {
     let collection = plan.base.collection.clone().unwrap_or("default".into());
     let limit = plan.base.limit.unwrap_or(10);
 
-    let mut instructions = vec![];
-
-    // Primary: KNN search
-    instructions.push(NaqInstruction::KnnSearch {
-        collection: collection.clone(),
-        query_text: plan.query.clone(),
-        k: limit,
-    });
-
-    // If full-text available, also search text
-    instructions.push(NaqInstruction::FullTextSearch {
+    // TODO: When embedding pipeline is available, emit KnnSearch here
+    // and keep FullTextSearch as a fallback with deduplication.
+    vec![NaqInstruction::FullTextSearch {
         collection,
         query: plan.query.clone(),
         limit,
-    });
-
-    instructions
+    }]
 }
 
-/// Lower an ImprintPlan to NAQ instructions.
-pub fn lower_imprint(plan: &ImprintPlan) -> Vec<NaqInstruction> {
-    let collection = plan.base.collection.clone().unwrap_or("default".into());
-    let node_type = plan
-        .epistemic_type
-        .map(|t| t.to_nietzsche_node_type().to_string())
-        .unwrap_or("Semantic".into());
-    let energy = plan.initial_energy.unwrap_or(0.6);
-
-    let mut instructions = vec![NaqInstruction::InsertNode {
-        collection: collection.clone(),
-        content: plan.content.clone(),
-        node_type,
-        energy,
-    }];
-
-    if let Some(ref link) = plan.link_to {
-        instructions.push(NaqInstruction::InsertEdge {
-            collection,
-            source: plan.content.clone(),
-            target: link.clone(),
-            edge_type: "ASSOCIATED".into(),
-            weight: 1.0,
-        });
-    }
-
-    instructions
-}
+// NOTE: lower_imprint() was removed — it was dead code that incorrectly used
+// plan.content as edge source instead of the UUID returned by InsertNode.
+// The correct implementation lives in NietzscheBackend::imprint() in backend.rs,
+// which captures the actual node UUID from the gRPC InsertNode response.
 
 /// Lower a TracePlan to NAQ instructions.
 pub fn lower_trace(plan: &TracePlan) -> Vec<NaqInstruction> {

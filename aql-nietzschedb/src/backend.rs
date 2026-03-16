@@ -203,31 +203,60 @@ impl NietzscheBackend {
                         }
                     }
                 }
-                NaqInstruction::Dijkstra { collection, start, end: _ } => {
+                NaqInstruction::Dijkstra { collection, start, end } => {
                     let resp = client.dijkstra(proto::TraversalRequest {
                         start_node_id: start,
                         max_depth: 10,
                         max_cost: 0.0,
                         energy_min: 0.0,
                         max_nodes: 1000,
-                        collection,
+                        collection: collection.clone(),
                     }).await.map_err(|e| AqlError::Backend(format!("Dijkstra: {e}")))?;
 
                     let inner = resp.into_inner();
-                    for (i, id) in inner.visited_ids.iter().enumerate() {
-                        all_nodes.push(CognitiveNode {
+
+                    // If a target is specified, truncate to only nodes up to
+                    // and including the target (Dijkstra visits in cost order).
+                    let visit_count = if !end.is_empty() {
+                        inner.visited_ids.iter()
+                            .position(|id| id == &end)
+                            .map(|pos| pos + 1) // include the target itself
+                            .unwrap_or(inner.visited_ids.len()) // target not found, return all
+                    } else {
+                        inner.visited_ids.len()
+                    };
+
+                    // Hydrate with full node data instead of empty shells
+                    for (i, id) in inner.visited_ids.iter().take(visit_count).enumerate() {
+                        let cost = inner.costs.get(i).copied().unwrap_or(0.0) as f32;
+                        match client.get_node(proto::NodeIdRequest {
                             id: id.clone(),
-                            content: String::new(),
-                            node_type: String::new(),
-                            energy: 0.0,
-                            confidence: inner.costs.get(i).copied().unwrap_or(0.0) as f32,
-                            valence: 0.0,
-                            arousal: 0.0,
-                            magnitude: None,
-                            created_at: None,
-                            updated_at: None,
-                            metadata: HashMap::new(),
-                        });
+                            collection: collection.clone(),
+                        }).await {
+                            Ok(node_resp) => {
+                                let n = node_resp.into_inner();
+                                if n.found {
+                                    let mut node = node_response_to_cognitive(&n, cost);
+                                    node.confidence = cost; // use cost as confidence for path ordering
+                                    all_nodes.push(node);
+                                }
+                            }
+                            Err(_) => {
+                                all_nodes.push(CognitiveNode {
+                                    id: id.clone(),
+                                    content: String::new(),
+                                    node_type: String::new(),
+                                    energy: 0.0,
+                                    confidence: cost,
+                                    valence: 0.0,
+                                    arousal: 0.0,
+                                    magnitude: None,
+                                    created_at: None,
+                                    updated_at: None,
+                                    metadata: HashMap::new(),
+                                });
+                            }
+                        }
                     }
                 }
                 NaqInstruction::TriggerDream { collection, topic: _ } => {

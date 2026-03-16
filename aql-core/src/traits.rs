@@ -13,6 +13,7 @@ use crate::plans::*;
 #[async_trait]
 pub trait AqlBackend: Send + Sync {
     /// Declare what this backend supports.
+    // TODO: planner/executor should consult capabilities() for graceful degradation
     fn capabilities(&self) -> BackendCapabilities;
 
     /// Backend name (for logs and EXPLAIN).

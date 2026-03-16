@@ -39,12 +39,6 @@ pub mod traits;
 pub mod result;
 pub mod executor;
 pub mod memory;
-pub mod energy;
-pub mod affect;
-pub mod attention;
-pub mod uncertainty;
-pub mod multiagent;
-pub mod reactive;
 
 // Re-exports for convenience
 pub use ast::{Program, Statement, Verb, Subject, Qualifier};

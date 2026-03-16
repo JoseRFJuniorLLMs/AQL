@@ -142,7 +142,10 @@ impl CognitivePlanner {
     }
 
     fn plan_simple(&mut self, stmt: &SimpleStatement) -> AqlResult<ExecutionPlan> {
-        // Apply mood if present
+        // Save config so mood mutations don't leak across statements in a chain
+        let saved_config = self.config.clone();
+
+        // Apply mood if present (scoped to this statement only)
         for q in &stmt.qualifiers {
             if let Qualifier::Mood(mood) = q {
                 self.config.apply_mood(*mood);
@@ -152,7 +155,7 @@ impl CognitivePlanner {
         let base = self.build_base(&stmt.qualifiers);
         let query = subject_to_query(&stmt.subject);
 
-        match stmt.verb {
+        let result = match stmt.verb {
             Verb::Recall => {
                 let mut plan = RecallPlan::new(query);
                 plan.base = base;
@@ -218,16 +221,17 @@ impl CognitivePlanner {
             })),
             Verb::Fade => {
                 if self.config.fade_suppressed {
-                    return Err(AqlError::Planning {
+                    Err(AqlError::Planning {
                         verb: Verb::Fade,
                         reason: "FADE suppressed by current mood".into(),
-                    });
+                    })
+                } else {
+                    Ok(ExecutionPlan::Fade(FadePlan {
+                        base,
+                        type_filter: extract_type_filter(&stmt.subject),
+                        ..Default::default()
+                    }))
                 }
-                Ok(ExecutionPlan::Fade(FadePlan {
-                    base,
-                    type_filter: extract_type_filter(&stmt.subject),
-                    ..Default::default()
-                }))
             }
             Verb::Descend => Ok(ExecutionPlan::Descend(DescendPlan {
                 base,
@@ -258,7 +262,12 @@ impl CognitivePlanner {
                 premise: query,
                 depth: extract_depth(&stmt.qualifiers),
             })),
-        }
+        };
+
+        // Restore config so mood mutations don't leak into subsequent statements
+        self.config = saved_config;
+
+        result
     }
 
     fn build_base(&self, qualifiers: &[Qualifier]) -> PlanBase {
