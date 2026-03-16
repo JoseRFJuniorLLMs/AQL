@@ -505,7 +505,7 @@ impl AqlBackend for NietzscheBackend {
         let col = self.collection(&plan.base.collection);
         // REFLECT → PageRank to find central knowledge
         let resp = self.client().await?.run_page_rank(proto::PageRankRequest {
-            collection: col,
+            collection: col.clone(),
             damping_factor: 0.85,
             max_iterations: 20,
             convergence_threshold: 1e-7,
@@ -515,19 +515,56 @@ impl AqlBackend for NietzscheBackend {
         let mut scores = resp.into_inner().scores;
         scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
-        let nodes: Vec<CognitiveNode> = scores.into_iter().take(limit).map(|s| CognitiveNode {
-            id: s.node_id,
-            content: String::new(),
-            node_type: String::new(),
-            energy: s.score as f32,
-            confidence: s.score as f32,
-            valence: 0.0,
-            arousal: 0.0,
-            magnitude: None,
-            created_at: None,
-            updated_at: None,
-            metadata: HashMap::new(),
-        }).collect();
+        // Hydrate top nodes with full content via GetNode
+        let top_scores: Vec<_> = scores.into_iter().take(limit).collect();
+        let mut client = self.client().await?;
+        let mut nodes = Vec::with_capacity(top_scores.len());
+
+        for s in top_scores {
+            match client.get_node(proto::NodeIdRequest {
+                id: s.node_id.clone(),
+                collection: col.clone(),
+            }).await {
+                Ok(node_resp) => {
+                    let n = node_resp.into_inner();
+                    if n.found {
+                        let mut node = node_response_to_cognitive(&n, s.score as f32);
+                        node.confidence = s.score as f32;
+                        nodes.push(node);
+                    } else {
+                        nodes.push(CognitiveNode {
+                            id: s.node_id,
+                            content: String::new(),
+                            node_type: String::new(),
+                            energy: s.score as f32,
+                            confidence: s.score as f32,
+                            valence: 0.0,
+                            arousal: 0.0,
+                            magnitude: None,
+                            created_at: None,
+                            updated_at: None,
+                            metadata: HashMap::new(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(node_id = %s.node_id, error = %e, "GetNode failed during REFLECT hydration");
+                    nodes.push(CognitiveNode {
+                        id: s.node_id,
+                        content: String::new(),
+                        node_type: String::new(),
+                        energy: s.score as f32,
+                        confidence: s.score as f32,
+                        valence: 0.0,
+                        arousal: 0.0,
+                        magnitude: None,
+                        created_at: None,
+                        updated_at: None,
+                        metadata: HashMap::new(),
+                    });
+                }
+            }
+        }
 
         Ok(CognitiveResult::from_nodes(nodes))
     }
