@@ -109,44 +109,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aql-mssql"
-version = "2.0.0"
-dependencies = [
- "aql-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aql-mysql"
-version = "2.0.0"
-dependencies = [
- "aql-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aql-neo4j"
-version = "2.0.0"
-dependencies = [
- "aql-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "aql-nietzschedb"
 version = "2.0.0"
 dependencies = [
@@ -158,57 +120,6 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aql-pgvector"
-version = "2.0.0"
-dependencies = [
- "aql-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "aql-qdrant"
-version = "2.0.0"
-dependencies = [
- "aql-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aql-redis"
-version = "2.0.0"
-dependencies = [
- "aql-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aql-sqlite"
-version = "2.0.0"
-dependencies = [
- "aql-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
  "tracing",
  "uuid",
 ]

@@ -3,13 +3,6 @@ resolver = "2"
 members = [
     "aql-core",
     "aql-nietzschedb",
-    "aql-neo4j",
-    "aql-qdrant",
-    "aql-pgvector",
-    "aql-redis",
-    "aql-mysql",
-    "aql-sqlite",
-    "aql-mssql",
     "aql-cli",
     "aql-wasm",
 ]
@@ -24,11 +17,6 @@ repository = "https://github.com/JoseRFJuniorLLMs/AQL"
 [workspace.dependencies]
 aql-core = { path = "aql-core" }
 aql-nietzschedb = { path = "aql-nietzschedb" }
-aql-neo4j = { path = "aql-neo4j" }
-aql-qdrant = { path = "aql-qdrant" }
-aql-pgvector = { path = "aql-pgvector" }
-aql-redis = { path = "aql-redis" }
-
 # Shared deps
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
