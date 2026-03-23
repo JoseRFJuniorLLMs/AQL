@@ -66,9 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Interactive REPL
     println!("{}", "╔══════════════════════════════════════════════╗".cyan());
-    println!("{}", "║   AQL — Agent Query Language v2.0       ║".cyan());
-    println!("{}", "║   Backend: NietzscheDB (full experience)    ║".cyan());
-    println!("{}", "║   Type 'help' or 'quit' to exit             ║".cyan());
+    println!("{}", "║   AQL — Agent Query Language v2.0            ║".cyan());
+    println!("{}", "║   Backend: NietzscheDB (full experience)     ║".cyan());
+    println!("{}", "║   Type 'help' or 'quit' to exit              ║".cyan());
     println!("{}", "╚══════════════════════════════════════════════╝".cyan());
     println!();
 
